@@ -26,7 +26,7 @@ The loader (`src/loader.php`, autoloaded by Composer) picks one at load time:
 
 ## Polyfill gaps
 
-The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. `{main}` outside any `run()` sees the root scope. A fiber with no `run()` of its own sees the scope most recently made current, by `run()` entry or exit; so a fiber created and driven inside a request's `run()` keeps the request's scope without anyone's cooperation. It cannot add `Fiber::getScope()` or `Generator::getScope()`, and has two gaps the extension closes:
+The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. `{main}` outside any `run()` sees the root scope. A fiber with no `run()` of its own sees the scope most recently made current, by `run()` entry or exit or by `fiber_interop\scope\activate()`; so a fiber created and driven inside a request's `run()` keeps the request's scope without anyone's cooperation. It cannot add `Fiber::getScope()` or `Generator::getScope()`, and has two gaps the extension closes:
 
 - A raw fiber created in scope A and resumed from scope B, without `$scope->run()` inside it, sees B (the engine says A). Libraries close this by capturing `Scope::getCurrent()` when they create a fiber and calling `$scope->run(...)` inside it.
 - A generator sees the scope of the code iterating it (the consumer), not the scope current when it was created.
@@ -42,6 +42,26 @@ function fiber_interop\scope\set_execution_key_provider(?callable $provider): vo
 `$provider()` returns `?object`, the object identifying the current execution unit; `null` means `{main}` (falls back to `Fiber::getCurrent()`). The polyfill uses `$provider() ?? Fiber::getCurrent()` as the `WeakMap` key, so a unit's stack is dropped when its object is released (Swoole: `Swoole\Coroutine::getContext()`, which dies with the coroutine). `null` restores the default.
 
 It is a function, not a `Scope` method, because the polyfill class has exactly the native class's public API. Under the native extension it is a no-op that records nothing: the extension cannot see coroutine switches that are not fiber switches, so Swoole users should use the polyfill.
+
+## Per-scope superglobals (polyfill)
+
+`$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` are per scope:
+
+- The root scope's are the SAPI's (whatever they hold at first use).
+- A new scope starts with copies of its creator's four arrays (the scope current at `new Scope()`; copy-on-write, so this is free until written).
+- Assignments inside a scope affect only that scope. Writing `$_GET = [...]` needs no call: it writes the live superglobal, which is captured into the scope's record at the next switch away.
+
+The live superglobals belong to the *active* scope. Switching is done by one function:
+
+```php
+function fiber_interop\scope\activate(): void
+```
+
+It compares the scope it last activated with `Scope::getCurrent()`. If they are the same it returns: one comparison, no work. Otherwise it stores the four live values into the previously active scope's record and loads the current scope's. `Scope::run()` calls it on entry and on exit, so `run()` restores the previous scope's globals when it returns. Records live in a `WeakMap` keyed by the `Scope` object and die with it; the root's record is held strongly.
+
+The invariant: **the active scope equals the current scope whenever user code runs.** `run()` keeps it within one execution unit; the event loop keeps it across switches. Adapters call `activate()` whenever the loop hands control to user code: at task start, after a resume, before a queued callback, and after `run()` returns to `{main}`. Calling it on every transfer is cheap, since a swap only happens on a real change of scope. Coverage therefore depends on the adapter; see the scope-state column of the [conformance table](https://fiber-interop.github.io/conformance.html).
+
+Under the native extension `activate()` exists and does nothing: per-scope superglobals are engine-level in the RFC's secondary vote, and the extension does not provide them yet.
 
 ## Polyfill rules
 

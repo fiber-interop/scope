@@ -210,4 +210,129 @@ final class ScopeTest extends TestCase
             \fiber_interop\scope\set_execution_key_provider(null);
         }
     }
+
+    private const SKIP_NATIVE = "engine-level in the RFC's secondary vote; not provided by the extension yet";
+
+    /** @var array<int, array> */
+    private array $savedGlobals;
+
+    protected function setUp(): void
+    {
+        $this->savedGlobals = [$_GET, $_POST, $_COOKIE, $_FILES];
+    }
+
+    protected function tearDown(): void
+    {
+        [$_GET, $_POST, $_COOKIE, $_FILES] = $this->savedGlobals;
+    }
+
+    public function testActivateExistsAndIsANoOpUnderTheExtension(): void
+    {
+        self::assertTrue(\function_exists('fiber_interop\\scope\\activate'));
+        if (IS_POLYFILL) {
+            self::markTestSkipped('extension only');
+        }
+        $_GET = ['x' => 1];
+        (new \Scope())->run(function () {
+            $_GET = ['x' => 2];
+            \fiber_interop\scope\activate();
+        });
+        \fiber_interop\scope\activate();
+        self::assertSame(['x' => 2], $_GET);
+    }
+
+    public function testSuperglobalsArePerScopeAcrossRun(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $_GET = ['who' => 'root']; $_POST = ['p' => 'root']; $_COOKIE = ['c' => 'root']; $_FILES = [];
+        $a = new \Scope(); $b = new \Scope();
+        $a->run(function () { self::assertSame(['who' => 'root'], $_GET); $_GET = ['who' => 'a']; $_POST = ['p' => 'a']; });
+        $b->run(function () { self::assertSame(['who' => 'root'], $_GET); $_GET = ['who' => 'b']; $_COOKIE = ['c' => 'b']; });
+        $a->run(function () {
+            self::assertSame(['who' => 'a'], $_GET);
+            self::assertSame(['p' => 'a'], $_POST);
+            self::assertSame(['c' => 'root'], $_COOKIE);
+        });
+        $b->run(function () {
+            self::assertSame(['who' => 'b'], $_GET);
+            self::assertSame(['p' => 'root'], $_POST);
+            self::assertSame(['c' => 'b'], $_COOKIE);
+        });
+        self::assertSame(['who' => 'root'], $_GET, 'main sees the root values after the outermost run()');
+        self::assertSame(['p' => 'root'], $_POST);
+        self::assertSame(['c' => 'root'], $_COOKIE);
+    }
+
+    public function testNestedScopeStartsWithACopyAndDoesNotLeak(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $_GET = ['who' => 'root'];
+        $a = new \Scope();
+        $a->run(function () {
+            $_GET['who'] = 'a';
+            $child = new \Scope();
+            $child->run(function () {
+                self::assertSame(['who' => 'a'], $_GET, 'inherits a copy of its creator');
+                $_GET['who'] = 'child';
+                $_GET['extra'] = 1;
+            });
+            self::assertSame(['who' => 'a'], $_GET, 'the child write does not leak to the parent');
+            $child->run(fn() => self::assertSame(['who' => 'child', 'extra' => 1], $_GET));
+        });
+        self::assertSame(['who' => 'root'], $_GET);
+    }
+
+    public function testActivateSwitchesWithAProviderDrivenKey(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $_GET = ['who' => 'root'];
+        $key = $k1 = new \stdClass(); $k2 = new \stdClass();
+        \fiber_interop\scope\set_execution_key_provider(function () use (&$key) { return $key; });
+        try {
+            $a = new \Scope(); $b = new \Scope();
+            $a->run(function () use (&$key, $k1, $k2, $b) {
+                $_GET = ['who' => 'a'];
+                $key = $k2;
+                $b->run(function () use (&$key, $k1, $k2) {
+                    $_GET = ['who' => 'b'];
+                    $key = $k1;                       // the loop switches to unit 1 ...
+                    \fiber_interop\scope\activate();  // ... and activates its scope
+                    self::assertSame(['who' => 'a'], $_GET);
+                    $key = $k2;
+                    \fiber_interop\scope\activate();
+                    self::assertSame(['who' => 'b'], $_GET);
+                });
+                $key = $k1;
+                \fiber_interop\scope\activate();
+                self::assertSame(['who' => 'a'], $_GET);
+            });
+            $key = null;
+            self::assertSame(['who' => 'root'], $_GET);
+        } finally {
+            \fiber_interop\scope\set_execution_key_provider(null);
+        }
+    }
+
+    public function testActivateIsANoOpWhenTheScopeIsUnchanged(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $_GET = ['v' => 0];
+        $records = new \ReflectionProperty(\Scope::class, 'globals');
+        $a = new \Scope();
+        $a->run(function () use ($a, $records) {
+            $_GET = ['v' => 1];
+            \fiber_interop\scope\activate();
+            self::assertSame(['v' => 1], $_GET);
+            self::assertSame(['v' => 0], $records->getValue()[$a][0], 'nothing was saved: no swap happened');
+        });
+        self::assertSame(['v' => 1], $records->getValue()[$a][0], 'saved when run() switched away');
+    }
 }

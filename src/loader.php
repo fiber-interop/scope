@@ -65,3 +65,28 @@ function set_execution_key_provider(?callable $provider): void
     $closure = $provider === null ? null : \Closure::fromCallable($provider);
     \Closure::bind(static function () use ($closure): void { \Scope::$keyProvider = $closure; }, null, \Scope::class)();
 }
+
+/**
+ * Polyfill only: makes the live $_GET, $_POST, $_COOKIE and $_FILES those of Scope::getCurrent().
+ *
+ * If the current scope is the one last activated, it returns (one comparison). Otherwise it saves the
+ * live values into the previously active scope and loads the current scope's. Scope::run() calls it on
+ * entry and exit; event loops call it whenever they hand control to user code (task start, after a
+ * resume, before a queued callback, after run() returns to {main}).
+ *
+ * A no-op when the native extension is loaded: per-scope superglobals are engine-level in the RFC's
+ * secondary vote.
+ */
+function activate(): void
+{
+    static $fn = null;
+    if (!IS_POLYFILL) {
+        return;
+    }
+    ($fn ??= \Closure::bind(static function (): void {
+        $current = \Scope::getCurrent();
+        if ($current !== (\Scope::$active ?? \Scope::$root)) {
+            \Scope::switchTo($current);
+        }
+    }, null, \Scope::class))();
+}
