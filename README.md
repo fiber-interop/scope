@@ -26,9 +26,9 @@ The loader (`src/loader.php`, autoloaded by Composer) picks one at load time:
 
 ## Polyfill gaps
 
-The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. It cannot add `Fiber::getScope()` or `Generator::getScope()`, and has two gaps the extension closes:
+The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. `{main}` outside any `run()` sees the root scope. A fiber with no `run()` of its own sees the scope most recently made current, by `run()` entry or exit; so a fiber created and driven inside a request's `run()` keeps the request's scope without anyone's cooperation. It cannot add `Fiber::getScope()` or `Generator::getScope()`, and has two gaps the extension closes:
 
-- A fiber created with `new Fiber` outside cooperating libraries sees the root scope, not the scope current at its construction. Libraries cooperate by capturing `Scope::getCurrent()` when they create a fiber and calling `$scope->run(...)` inside it.
+- A raw fiber created in scope A and resumed from scope B, without `$scope->run()` inside it, sees B (the engine says A). Libraries close this by capturing `Scope::getCurrent()` when they create a fiber and calling `$scope->run(...)` inside it.
 - A generator sees the scope of the code iterating it (the consumer), not the scope current when it was created.
 
 ## Execution key provider (polyfill only)

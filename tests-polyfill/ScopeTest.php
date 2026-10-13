@@ -118,16 +118,30 @@ final class ScopeTest extends TestCase
         self::assertNull($w->get());
     }
 
-    public function testGapFiberConstructedByNonCooperatingCode(): void
+    public function testFiberConstructedAndDrivenInsideRunKeepsTheScope(): void
     {
-        if (!IS_POLYFILL) {
-            $a = new \Scope();
-            $f = $a->run(fn() => new \Fiber(fn() => \Scope::getCurrent()));
+        // Polyfill: an unknown fiber resolves to the active scope (the one run() made current).
+        $a = new \Scope();
+        $f = $a->run(function () {
+            $f = new \Fiber(fn() => \Scope::getCurrent());
             $f->start();
+            return $f;
+        });
+        self::assertSame($a, $f->getReturn());
+    }
+
+    public function testGapRawFiberResumedFromAnotherScope(): void
+    {
+        $a = new \Scope(); $b = new \Scope();
+        $f = $a->run(fn() => new \Fiber(function () { \Fiber::suspend(); return \Scope::getCurrent(); }));
+        $a->run(fn() => $f->start());
+        $b->run(fn() => $f->resume());
+        if (!IS_POLYFILL) {
             self::assertSame($a, $f->getReturn());
             return;
         }
-        self::markTestSkipped('Polyfill gap: a fiber created with `new Fiber` by code that does not wrap its callable in Scope::getCurrent()->run() sees the root scope, not the scope current at its construction. The extension closes this gap.');
+        self::assertSame($b, $f->getReturn());
+        self::markTestSkipped('Polyfill gap: a fiber with no run() of its own sees the scope most recently made current, so a raw fiber created in scope A and resumed from scope B without $scope->run() sees B. The extension closes this gap.');
     }
 
     public function testGapGeneratorSeesConsumerScope(): void
@@ -158,8 +172,8 @@ final class ScopeTest extends TestCase
             $current = $k1;
             $a->run(function () use (&$current, $k1, $k2, $a, $b) {
                 self::assertSame($a, \Scope::getCurrent());
-                $current = $k2;
-                self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
+                $current = $k2; // unknown key: the scope most recently made current
+                self::assertSame($a, \Scope::getCurrent());
                 $b->run(function () use (&$current, $k1, $k2, $b) {
                     self::assertSame($b, \Scope::getCurrent());
                     $current = $k1;

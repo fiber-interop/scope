@@ -6,10 +6,11 @@
  *
  * The current scope is kept per execution unit: a WeakMap from the unit's object
  * (a Fiber, or whatever fiber_interop\scope\set_execution_key_provider()'s provider
- * returns) to a stack of the scopes it entered with run(), plus one stack for {main}. Known gaps, closed
- * by the extension: a fiber created with `new Fiber` by code that doesn't
- * cooperate (wrap its callable in `Scope::getCurrent()->run()`) sees the root
- * scope, and a generator sees the scope of whoever is iterating it.
+ * returns) to a stack of the scopes it entered with run(), plus one stack for {main}. A unit other
+ * than {main} with no stack entry sees the active scope: the one most recently made current by run()
+ * entry or exit.
+ * Known gaps, closed by the extension: a raw fiber created in scope A and resumed from scope B without
+ * $scope->run() sees B, and a generator sees the scope of whoever is iterating it.
  */
 final class Scope
 {
@@ -24,6 +25,9 @@ final class Scope
     /** @var list<Scope> {main}'s stack */
     private static array $main = [];
 
+    /** The scope most recently made current by run() entry or exit; null = the root. */
+    private static ?Scope $active = null;
+
     public function __construct() {}
 
     public function __clone(): void { throw new Error('Trying to clone an uncloneable object of class Scope'); }
@@ -33,6 +37,7 @@ final class Scope
     /** Calls $callback with this scope as the current scope, and returns its result. */
     public function run(callable $callback, mixed ...$args): mixed
     {
+        $prev = self::getCurrent();
         $fiber = (self::$keyProvider ?? Fiber::getCurrent(...))() ?? Fiber::getCurrent();
         if ($fiber === null) {
             self::$main[] = $this;
@@ -42,6 +47,7 @@ final class Scope
             $stack[] = $this;
             self::$fibers[$fiber] = $stack;
         }
+        self::$active = $this;
         try {
             return $callback(...$args);
         } finally {
@@ -56,15 +62,19 @@ final class Scope
                     unset(self::$fibers[$fiber]);
                 }
             }
+            self::$active = $prev;
         }
     }
 
-    /** The current scope; the root scope outside any run(). */
+    /** The current scope: the top of this unit's run() stack; else the root in {main}, the active scope in a fiber. */
     public static function getCurrent(): Scope
     {
         $fiber = (self::$keyProvider ?? Fiber::getCurrent(...))() ?? Fiber::getCurrent();
-        $stack = $fiber === null ? self::$main : (self::$fibers[$fiber] ?? null);
-        return $stack ? $stack[array_key_last($stack)] : self::getRootScope();
+        if ($fiber === null) {
+            return self::$main ? self::$main[array_key_last(self::$main)] : self::getRootScope();
+        }
+        $stack = self::$fibers[$fiber] ?? null;
+        return $stack ? $stack[array_key_last($stack)] : (self::$active ?? self::getRootScope());
     }
 
     /** The root scope: one object for the whole request, current in {main} outside any run(). */
