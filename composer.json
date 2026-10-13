@@ -3,22 +3,38 @@
     "description": "Scope: the identity of the operation (request, job) that code belongs to. PHP extension, with a userland polyfill when it is not loaded.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["scope", "fiber", "async", "request", "polyfill"],
+    "keywords": [
+        "scope",
+        "fiber",
+        "async",
+        "request",
+        "polyfill"
+    ],
     "authors": [
-        {"name": "Frode Børli", "email": "frode@ennerd.com"}
+        {
+            "name": "Frode Børli",
+            "email": "frode@ennerd.com"
+        }
     ],
     "require": {
         "php": "^8.1"
     },
-    "suggest": {"fiber-interop/ext-scope": "the native extension; closes the polyfill gaps"},
+    "suggest": {
+        "fiber-interop/ext-scope": "the native extension; closes the polyfill gaps"
+    },
     "require-dev": {
         "phpunit/phpunit": "^10.5 || ^11.0"
     },
     "autoload": {
-        "files": ["src/loader.php"]
+        "files": [
+            "src/loader.php"
+        ]
     },
     "archive": {
-        "exclude": ["/tests-polyfill", "/.github"]
+        "exclude": [
+            "/tests-polyfill",
+            "/.github"
+        ]
     },
     "scripts": {
         "test": "phpunit"
