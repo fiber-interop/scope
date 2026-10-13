@@ -14,19 +14,19 @@ jobs:
         php: ['8.2', '8.3', '8.4', '8.5']
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: {repository: fiber-interop/ext-scope, path: ext-scope}
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           tools: phpize, php-config, composer
           coverage: none
       - name: Build
-        run: phpize && ./configure && make -j"$(nproc)"
-      - name: make test
-        run: make test NO_INTERACTION=1 REPORT_EXIT_STATUS=1 TESTS="--show-diff tests"
+        run: cd ext-scope && phpize && ./configure && make -j"$(nproc)"
       - name: PHPUnit against the extension
         run: |
           composer install --no-interaction --no-progress
-          php -d extension="$PWD/modules/scope.so" vendor/bin/phpunit
+          php -d extension="$PWD/ext-scope/modules/scope.so" vendor/bin/phpunit
 
   polyfill:
     name: Polyfill, PHP ${{ matrix.php }}

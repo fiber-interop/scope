@@ -22,6 +22,10 @@ final class Scope
 
     public function __construct() {}
 
+    public function __clone(): void { throw new Error('Trying to clone an uncloneable object of class Scope'); }
+    public function __serialize(): array { throw new Exception("Serialization of 'Scope' is not allowed"); }
+    public function __unserialize(array $data): void { throw new Exception("Unserialization of 'Scope' is not allowed"); }
+
     /** Calls $callback with this scope as the current scope, and returns its result. */
     public function run(callable $callback, mixed ...$args): mixed
     {

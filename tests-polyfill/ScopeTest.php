@@ -18,7 +18,7 @@ final class ScopeTest extends TestCase
     {
         $c = new \ReflectionClass(\Scope::class);
         self::assertTrue($c->isFinal());
-        $methods = array_map(fn($m) => $m->getName(), $c->getMethods(\ReflectionMethod::IS_PUBLIC));
+        $methods = array_map(fn($m) => $m->getName(), array_filter($c->getMethods(\ReflectionMethod::IS_PUBLIC), fn($m) => !in_array($m->getName(), ['__clone', '__serialize', '__unserialize'])));
         sort($methods);
         self::assertSame(['__construct', 'getCurrent', 'getRootScope', 'run'], $methods);
         self::assertSame('Scope', (string) $c->getMethod('getCurrent')->getReturnType());
