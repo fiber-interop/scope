@@ -140,4 +140,60 @@ final class ScopeTest extends TestCase
         }
         self::markTestSkipped('Polyfill gap: a generator sees the scope of the code iterating it, not the scope current at its creation. The extension closes this gap.');
     }
+
+    public function testExecutionKeyProviderIsolatesStacksPerKey(): void
+    {
+        if (!IS_POLYFILL) {
+            \fiber_interop\scope\set_execution_key_provider(fn() => new \stdClass());
+            self::assertTrue(true, 'no-op under the extension');
+            return;
+        }
+        $current = null;
+        \fiber_interop\scope\set_execution_key_provider(function () use (&$current) { return $current; });
+        try {
+            $k1 = new \stdClass();
+            $k2 = new \stdClass();
+            $a = new \Scope();
+            $b = new \Scope();
+            $current = $k1;
+            $a->run(function () use (&$current, $k1, $k2, $a, $b) {
+                self::assertSame($a, \Scope::getCurrent());
+                $current = $k2;
+                self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
+                $b->run(function () use (&$current, $k1, $k2, $b) {
+                    self::assertSame($b, \Scope::getCurrent());
+                    $current = $k1;
+                    self::assertNotSame($b, \Scope::getCurrent());
+                    $current = $k2;
+                });
+                $current = $k1;
+                self::assertSame($a, \Scope::getCurrent());
+            });
+            $current = null; // null key: {main}
+            self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
+        } finally {
+            \fiber_interop\scope\set_execution_key_provider(null);
+        }
+    }
+
+    public function testExecutionKeyIsNotRetainedByThePolyfill(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped('polyfill only');
+        }
+        $holder = [new \stdClass()];
+        \fiber_interop\scope\set_execution_key_provider(function () use (&$holder) { return $holder[0] ?? null; });
+        try {
+            $map = new \ReflectionProperty(\Scope::class, 'fibers');
+            $weak = \WeakReference::create($holder[0]);
+            (new \Scope())->run(function () use ($map) {
+                self::assertCount(1, $map->getValue());
+            });
+            self::assertCount(0, $map->getValue(), 'stack dropped when the last run() ends');
+            $holder = [];
+            self::assertNull($weak->get(), 'the WeakMap does not keep the key alive');
+        } finally {
+            \fiber_interop\scope\set_execution_key_provider(null);
+        }
+    }
 }

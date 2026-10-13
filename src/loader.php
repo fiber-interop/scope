@@ -45,3 +45,23 @@ if (\class_exists('Scope', false)) {
     require __DIR__ . '/Scope.php';
     \define('fiber_interop\scope\IS_POLYFILL', true);
 }
+
+/**
+ * Polyfill only: makes the polyfill key its scope stacks on the object $provider returns instead of
+ * Fiber::getCurrent(), for runtimes whose execution unit is not a Fiber (e.g. Swoole coroutines).
+ *
+ * $provider() returns the object identifying the current execution unit, or null for {main}/"no
+ * unit"; null falls back to Fiber::getCurrent(). The object is a WeakMap key, so a unit's stack is
+ * dropped when the object is released. Pass null to restore the default (Fiber::getCurrent()).
+ *
+ * When the native extension is loaded this is a no-op that records nothing: the extension cannot see
+ * coroutine switches that are not fiber switches, so such runtimes should use the polyfill.
+ */
+function set_execution_key_provider(?callable $provider): void
+{
+    if (!IS_POLYFILL) {
+        return;
+    }
+    $closure = $provider === null ? null : \Closure::fromCallable($provider);
+    \Closure::bind(static function () use ($closure): void { \Scope::$keyProvider = $closure; }, null, \Scope::class)();
+}

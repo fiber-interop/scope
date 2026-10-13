@@ -4,8 +4,9 @@
  * Userland polyfill of the Scope class from the PHP RFC "Scope", declared by
  * src/loader.php only when no Scope class exists (the extension is not loaded).
  *
- * The current scope is kept per fiber: a WeakMap from Fiber to a stack of the
- * scopes it entered with run(), plus one stack for {main}. Known gaps, closed
+ * The current scope is kept per execution unit: a WeakMap from the unit's object
+ * (a Fiber, or whatever fiber_interop\scope\set_execution_key_provider()'s provider
+ * returns) to a stack of the scopes it entered with run(), plus one stack for {main}. Known gaps, closed
  * by the extension: a fiber created with `new Fiber` by code that doesn't
  * cooperate (wrap its callable in `Scope::getCurrent()->run()`) sees the root
  * scope, and a generator sees the scope of whoever is iterating it.
@@ -14,8 +15,11 @@ final class Scope
 {
     private static ?Scope $root = null;
 
-    /** @var WeakMap<Fiber, list<Scope>>|null */
+    /** @var WeakMap<object, list<Scope>>|null */
     private static ?WeakMap $fibers = null;
+
+    /** Set by fiber_interop\scope\set_execution_key_provider(). */
+    private static ?\Closure $keyProvider = null;
 
     /** @var list<Scope> {main}'s stack */
     private static array $main = [];
@@ -29,7 +33,7 @@ final class Scope
     /** Calls $callback with this scope as the current scope, and returns its result. */
     public function run(callable $callback, mixed ...$args): mixed
     {
-        $fiber = Fiber::getCurrent();
+        $fiber = (self::$keyProvider ?? Fiber::getCurrent(...))() ?? Fiber::getCurrent();
         if ($fiber === null) {
             self::$main[] = $this;
         } else {
@@ -58,7 +62,7 @@ final class Scope
     /** The current scope; the root scope outside any run(). */
     public static function getCurrent(): Scope
     {
-        $fiber = Fiber::getCurrent();
+        $fiber = (self::$keyProvider ?? Fiber::getCurrent(...))() ?? Fiber::getCurrent();
         $stack = $fiber === null ? self::$main : (self::$fibers[$fiber] ?? null);
         return $stack ? $stack[array_key_last($stack)] : self::getRootScope();
     }

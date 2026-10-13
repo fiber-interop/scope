@@ -31,6 +31,18 @@ The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the
 - A fiber created with `new Fiber` outside cooperating libraries sees the root scope, not the scope current at its construction. Libraries cooperate by capturing `Scope::getCurrent()` when they create a fiber and calling `$scope->run(...)` inside it.
 - A generator sees the scope of the code iterating it (the consumer), not the scope current when it was created.
 
+## Execution key provider (polyfill only)
+
+By default the polyfill keys its stacks on `Fiber::getCurrent()` (`null` = `{main}`). Runtimes whose execution unit is not a Fiber (Swoole coroutines, for instance, all see `Fiber::getCurrent() === null`) would otherwise share the `{main}` stack. For them:
+
+```php
+function fiber_interop\scope\set_execution_key_provider(?callable $provider): void
+```
+
+`$provider()` returns `?object`, the object identifying the current execution unit; `null` means `{main}` (falls back to `Fiber::getCurrent()`). The polyfill uses `$provider() ?? Fiber::getCurrent()` as the `WeakMap` key, so a unit's stack is dropped when its object is released (Swoole: `Swoole\Coroutine::getContext()`, which dies with the coroutine). `null` restores the default.
+
+It is a function, not a `Scope` method, because the polyfill class has exactly the native class's public API. Under the native extension it is a no-op that records nothing: the extension cannot see coroutine switches that are not fiber switches, so Swoole users should use the polyfill.
+
 ## Polyfill rules
 
 - It declares nothing if a `Scope` class already exists.
