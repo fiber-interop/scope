@@ -90,3 +90,29 @@ function activate(): void
         }
     }, null, \Scope::class))();
 }
+
+if (IS_POLYFILL) {
+    /**
+     * @internal For runtime authors (event loops and coroutine adapters); not part of the Scope RFC.
+     *
+     * A counter that strictly increases whenever the polyfill's active scope may have changed: on every
+     * Scope::run() entry and exit (also when run() leaves by an exception, and also when the scope it
+     * returns to is the one it left) and whenever activate() swaps scopes. It never goes backwards.
+     *
+     * A userland loop must know each coroutine's current scope at every suspend, because the coroutine
+     * can change it with $scope->run(). Reading this at resume and at suspend and calling
+     * Scope::getCurrent() only when it moved avoids that call on most switches.
+     *
+     * Declared only when the polyfill is in use: the extension tracks the scope per fiber and never saves
+     * or restores it, so loops read Fiber::getScope() there instead.
+     */
+    function generation(): int
+    {
+        static $box = null;
+        if ($box === null) {
+            $box = [];
+            $box[0] = &\Closure::bind(static function &(): int { return \Scope::$generation; }, null, \Scope::class)();
+        }
+        return $box[0];
+    }
+}

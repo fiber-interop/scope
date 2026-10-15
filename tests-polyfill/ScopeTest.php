@@ -8,6 +8,10 @@ use PHPUnit\Framework\TestCase;
 
 use const fiber_interop\scope\IS_POLYFILL;
 
+use function fiber_interop\scope\activate;
+use function fiber_interop\scope\generation;
+use function fiber_interop\scope\set_execution_key_provider;
+
 /**
  * The behaviours of tests/*.phpt that userland can provide. Runs against
  * whichever Scope is loaded: the polyfill, or the extension (IS_POLYFILL false).
@@ -334,5 +338,107 @@ final class ScopeTest extends TestCase
             self::assertSame(['v' => 0], $records->getValue()[$a][0], 'nothing was saved: no swap happened');
         });
         self::assertSame(['v' => 1], $records->getValue()[$a][0], 'saved when run() switched away');
+    }
+
+    public function testGenerationExistsOnlyInThePolyfill(): void
+    {
+        self::assertSame(IS_POLYFILL, \function_exists('fiber_interop\\scope\\generation'));
+    }
+
+    public function testGenerationIsUnchangedAcrossPlainCode(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $g = generation();
+        self::assertIsInt($g);
+        \Scope::getCurrent();
+        \Scope::getRootScope();
+        new \Scope();
+        $f = new \Fiber(function () { \Fiber::suspend(); });
+        $f->start();
+        $f->resume();
+        self::assertSame($g, generation());
+    }
+
+    public function testGenerationBumpsOnRunEnterAndLeave(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        foreach ([new \Scope(), \Scope::getRootScope()] as $scope) {   // the root: a run() that changes nothing
+            $before = generation();
+            $inside = $scope->run(fn () => generation());
+            self::assertGreaterThan($before, $inside);
+            self::assertGreaterThan($inside, generation());
+        }
+    }
+
+    public function testGenerationBumpsOnRunLeaveByException(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $inside = null;
+        try {
+            (new \Scope())->run(function () use (&$inside) {
+                $inside = generation();
+                throw new \RuntimeException('x');
+            });
+        } catch (\RuntimeException) {
+        }
+        self::assertGreaterThan($inside, generation());
+    }
+
+    public function testGenerationBumpsOnActivateOnlyWhenItSwitches(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $key = $k1 = new \stdClass();
+        set_execution_key_provider(function () use (&$key) { return $key; });
+        try {
+            $a = new \Scope();
+            $a->run(function () use (&$key, $k1) {
+                $g = generation();
+                activate();
+                self::assertSame($g, generation(), 'unchanged scope: no bump');
+                $key = null;                          // the loop switches to {main} (root) ...
+                activate();
+                self::assertGreaterThan($g, $g = generation());
+                $key = $k1;                           // ... and back to unit 1 (a)
+                activate();
+                self::assertGreaterThan($g, generation());
+            });
+        } finally {
+            $key = null;
+            set_execution_key_provider(null);
+        }
+    }
+
+    public function testGenerationMovesWhenAnotherFiberMadeAScopeCurrent(): void
+    {
+        if (!IS_POLYFILL) {
+            self::markTestSkipped(self::SKIP_NATIVE);
+        }
+        $b = new \Scope();
+        $seen = [];
+        $loop = new \Fiber(function () use (&$seen) {       // no run() of its own: sees the active scope
+            while (true) {
+                $seen[] = [generation(), \Scope::getCurrent()];
+                \Fiber::suspend();
+            }
+        });
+        $other = new \Fiber(fn () => $b->run(fn () => \Fiber::suspend()));
+        $loop->start();
+        $other->start();                                    // enters $b and suspends inside it
+        $loop->resume();
+        self::assertGreaterThan($seen[0][0], $seen[1][0]);
+        self::assertSame(\Scope::getRootScope(), $seen[0][1]);
+        self::assertSame($b, $seen[1][1]);
+        $other->resume();                                   // leaves $b
+        $loop->resume();
+        self::assertGreaterThan($seen[1][0], $seen[2][0]);
+        self::assertSame(\Scope::getRootScope(), $seen[2][1]);
     }
 }

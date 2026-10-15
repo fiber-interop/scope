@@ -63,6 +63,14 @@ The invariant: **the active scope equals the current scope whenever user code ru
 
 Under the native extension `activate()` exists and does nothing: per-scope superglobals are engine-level in the RFC's secondary vote, and the extension does not provide them yet.
 
+## For runtime authors: `generation()` (polyfill only, `@internal`)
+
+```php
+function fiber_interop\scope\generation(): int
+```
+
+A counter that strictly increases whenever the polyfill's active scope may have changed: on every `Scope::run()` entry and exit (including exit by exception, and including a `run()` that returns to the scope it left) and whenever `activate()` swaps scopes. It exists because a userland loop must know each coroutine's current scope at every suspend: the coroutine can change it with `$scope->run()`. Loops read `generation()` at resume and at suspend, and call `Scope::getCurrent()` only when it moved. It is not part of the Scope RFC and is declared only when `IS_POLYFILL` is `true`: under ext-scope the engine tracks the scope per fiber and never saves or restores it, so loops read `Fiber::getScope()` there instead.
+
 ## Polyfill rules
 
 - It declares nothing if a `Scope` class already exists.

@@ -37,6 +37,9 @@ final class Scope
     /** The root's superglobals while it is not active (held strongly; the root never dies). */
     private static ?array $rootGlobals = null;
 
+    /** Bumped by every switchTo() call; read through fiber_interop\scope\generation(). */
+    private static int $generation = 0;
+
     /** A new scope starts with copies of its creator's (the current scope's) superglobals. */
     public function __construct()
     {
@@ -47,9 +50,13 @@ final class Scope
             : ($creator === self::$root ? self::$rootGlobals : self::$globals[$creator]);
     }
 
-    /** Makes $scope the active scope: saves the live superglobals to the old one, loads $scope's. */
+    /**
+     * Makes $scope the active scope: saves the live superglobals to the old one, loads $scope's.
+     * Bumps $generation even when $scope is already active, so every run() entry and exit counts.
+     */
     private static function switchTo(Scope $scope): void
     {
+        ++self::$generation;
         $old = self::$active ?? self::getRootScope();
         if ($old === $scope) {
             return;
