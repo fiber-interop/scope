@@ -436,4 +436,111 @@ final class ScopeTest extends TestCase
         self::assertGreaterThan($seen[1][0], $seen[2][0]);
         self::assertSame(\Scope::getRootScope(), $seen[2][1]);
     }
+
+    // --- Secondary vote B: default timezone and locale follow the scope ---
+
+    public function testTimezoneRootUnchanged(): void
+    {
+        $tz = date_default_timezone_get();
+        (new \Scope())->run(fn() => 1);
+        self::assertSame($tz, date_default_timezone_get());
+    }
+
+    public function testTimezoneInheritsAtCreationAndIsolatesSiblings(): void
+    {
+        $orig = date_default_timezone_get();
+        try {
+            date_default_timezone_set('Europe/Oslo');
+            $a = new \Scope();                      // inherits Oslo
+            date_default_timezone_set('UTC');
+            $b = new \Scope();                      // inherits UTC
+            self::assertSame('Europe/Oslo', $a->run(fn() => date_default_timezone_get()));
+            $a->run(fn() => date_default_timezone_set('Asia/Tokyo'));
+            $b->run(fn() => date_default_timezone_set('America/Chicago'));
+            self::assertSame('UTC', date_default_timezone_get());
+            self::assertSame('Asia/Tokyo', $a->run(fn() => date_default_timezone_get()));
+            self::assertSame('America/Chicago', $b->run(fn() => date_default_timezone_get()));
+            self::assertSame(
+                'Asia/Tokyo America/Chicago Asia/Tokyo',
+                $a->run(fn() => date_default_timezone_get() . ' ' . $b->run(fn() => date_default_timezone_get()) . ' ' . date_default_timezone_get()),
+            );
+            // A scope created inside a scope inherits that scope's live value.
+            self::assertSame('Asia/Tokyo', $a->run(fn() => (new \Scope())->run(fn() => date_default_timezone_get())));
+        } finally {
+            date_default_timezone_set($orig);
+        }
+    }
+
+    public function testTimezoneSharedAcrossFibersOfOneScope(): void
+    {
+        $orig = date_default_timezone_get();
+        try {
+            $a = new \Scope();
+            $seen = $a->run(function () {
+                $f = new \Fiber(function () { echo ''; return date_default_timezone_get(); });
+                date_default_timezone_set('Asia/Tokyo');
+                $f->start();
+                return $f->getReturn();
+            });
+            self::assertSame('Asia/Tokyo', $seen);
+            self::assertSame($orig, date_default_timezone_get());
+        } finally {
+            date_default_timezone_set($orig);
+        }
+    }
+
+    public function testDateOutputReflectsScopeTimezone(): void
+    {
+        $orig = date_default_timezone_get();
+        try {
+            date_default_timezone_set('UTC');
+            $a = new \Scope();
+            $a->run(fn() => date_default_timezone_set('Asia/Tokyo'));
+            self::assertSame('1970-01-01 00:00', date('Y-m-d H:i', 0));
+            self::assertSame('1970-01-01 09:00', $a->run(fn() => date('Y-m-d H:i', 0)));
+            self::assertSame('1970-01-01 00:00', date('Y-m-d H:i', 0));
+        } finally {
+            date_default_timezone_set($orig);
+        }
+    }
+
+    public function testLocaleFollowsScope(): void
+    {
+        if (!extension_loaded('intl')) {
+            self::markTestSkipped('intl not loaded');
+        }
+        $orig = \Locale::getDefault();
+        try {
+            \Locale::setDefault('en_US');
+            $a = new \Scope();
+            \Locale::setDefault('de_DE');
+            $b = new \Scope();
+            $a->run(function () { self::assertSame('en_US', \Locale::getDefault()); \Locale::setDefault('nb_NO'); });
+            self::assertSame('de_DE', \Locale::getDefault());
+            self::assertSame('nb_NO', $a->run(fn() => \Locale::getDefault()));
+            self::assertSame('de_DE', $b->run(fn() => \Locale::getDefault()));
+            self::assertSame('de_DE', \Locale::getDefault());
+        } finally {
+            \Locale::setDefault($orig);
+        }
+    }
+
+    public function testTimezoneStress(): void
+    {
+        $orig = date_default_timezone_get();
+        try {
+            $zones = ['UTC', 'Asia/Tokyo', 'Europe/Oslo', 'America/Chicago'];
+            $scopes = [];
+            for ($i = 0; $i < 1000; $i++) {
+                $scopes[$i] = new \Scope();
+                $scopes[$i]->run(fn() => date_default_timezone_set($zones[$i % 4]));
+            }
+            for ($i = 999; $i >= 0; $i--) {
+                self::assertSame($zones[$i % 4], $scopes[$i]->run(fn() => date_default_timezone_get()));
+            }
+            self::assertSame($orig, date_default_timezone_get());
+        } finally {
+            date_default_timezone_set($orig);
+        }
+    }
 }

@@ -40,13 +40,20 @@ final class Scope
     /** Bumped by every switchTo() call; read through fiber_interop\scope\generation(). */
     private static int $generation = 0;
 
-    /** A new scope starts with copies of its creator's (the current scope's) superglobals. */
+    /** Whether ext/intl is loaded (Locale follows the scope); null until first use. */
+    private static ?bool $intl = null;
+
+    /**
+     * A new scope starts with copies of its creator's (the current scope's) superglobals, default
+     * timezone and (with ext/intl) default locale. A record is [_GET, _POST, _COOKIE, _FILES, timezone, locale].
+     */
     public function __construct()
     {
         $creator = self::getCurrent();
         self::$globals ??= new WeakMap();
+        self::$intl ??= \class_exists(\Locale::class, false);
         self::$globals[$this] = $creator === (self::$active ?? self::$root)
-            ? [$_GET, $_POST, $_COOKIE, $_FILES]
+            ? [$_GET, $_POST, $_COOKIE, $_FILES, \date_default_timezone_get(), self::$intl ? \Locale::getDefault() : null]
             : ($creator === self::$root ? self::$rootGlobals : self::$globals[$creator]);
     }
 
@@ -61,12 +68,25 @@ final class Scope
         if ($old === $scope) {
             return;
         }
+        // date_default_timezone_set() and Locale::setDefault() cannot be intercepted: capture the live
+        // values as the leaving scope's, and set the entering scope's only when they differ.
+        self::$intl ??= \class_exists(\Locale::class, false);
+        $tz = \date_default_timezone_get();
+        $loc = self::$intl ? \Locale::getDefault() : null;
+        $rec = [$_GET, $_POST, $_COOKIE, $_FILES, $tz, $loc];
         if ($old === self::$root) {
-            self::$rootGlobals = [$_GET, $_POST, $_COOKIE, $_FILES];
+            self::$rootGlobals = $rec;
         } else {
-            self::$globals[$old] = [$_GET, $_POST, $_COOKIE, $_FILES];
+            self::$globals[$old] = $rec;
         }
-        [$_GET, $_POST, $_COOKIE, $_FILES] = $scope === self::$root ? self::$rootGlobals : self::$globals[$scope];
+        $rec = $scope === self::$root ? self::$rootGlobals : self::$globals[$scope];
+        [$_GET, $_POST, $_COOKIE, $_FILES] = $rec;
+        if ($rec[4] !== $tz) {
+            \date_default_timezone_set($rec[4]);
+        }
+        if ($rec[5] !== $loc && $loc !== null) {
+            \Locale::setDefault($rec[5]);
+        }
         self::$active = $scope;
     }
 
@@ -120,7 +140,7 @@ final class Scope
     /** The root scope: one object for the whole request, current in {main} outside any run(). */
     public static function getRootScope(): Scope
     {
-        // Without the constructor: there is no creator to copy superglobals from.
+        // Without the constructor: there is no creator to copy from.
         return self::$root ??= (new ReflectionClass(self::class))->newInstanceWithoutConstructor();
     }
 }

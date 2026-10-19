@@ -61,7 +61,15 @@ It compares the scope it last activated with `Scope::getCurrent()`. If they are 
 
 The invariant: **the active scope equals the current scope whenever user code runs.** `run()` keeps it within one execution unit; the event loop keeps it across switches. Adapters call `activate()` whenever the loop hands control to user code: at task start, after a resume, before a queued callback, and after `run()` returns to `{main}`. Calling it on every transfer is cheap, since a swap only happens on a real change of scope. Coverage therefore depends on the adapter; see the scope-state column of the [conformance table](https://fiber-interop.github.io/conformance.html).
 
-Under the native extension `activate()` exists and does nothing: per-scope superglobals are engine-level in the RFC's secondary vote, and the extension does not provide them yet.
+Under the native extension `activate()` exists and does nothing: per-scope superglobals are engine-level in the extension (RFC secondary vote A).
+
+## Per-scope default timezone and locale (polyfill)
+
+Secondary vote B: `date_default_timezone_get()/set()` and, when ext/intl is loaded, `Locale::getDefault()/setDefault()` follow the scope. The root has today's values, a new scope inherits its creator's at creation, and a change inside a scope affects only that scope.
+
+**Polyfill limitation.** Userland cannot intercept `date_default_timezone_set()` or `Locale::setDefault()` (the extension does, at engine level). The polyfill reconciles at switch points instead: when a scope is left, the live timezone and locale are read into that scope's record; when a scope is entered (`run()` entry/exit, or `activate()` when it really swaps) its values are applied, but only if they differ from the live ones. A change made and read within one scope with no switch in between is naturally correct, and other scopes see their own values after the next switch. Code that changes the timezone from a fiber switch the loop does not report through `activate()` can leak the value to a sibling until the next switch. A scope whose timezone was never set inherits the creator's *effective* value (the ini fallback resolved at creation), not "unset". `Locale::getDefault()` is ignored unless ext/intl is loaded before the first `Scope` is created.
+
+Cost: one `date_default_timezone_get()` (plus `Locale::getDefault()` with intl) and a string comparison per real switch, roughly 0.1-0.3 µs.
 
 ## For runtime authors: `generation()` (polyfill only, `@internal`)
 
@@ -79,6 +87,10 @@ A counter that strictly increases whenever the polyfill's active scope may have 
 - Whether it is in use is exposed through the `fiber_interop\scope\IS_POLYFILL` constant, never on the class.
 
 A project that declares its own global `Scope` class cannot install this package.
+
+## Release 0.3.0
+
+0.3.0 is the "Scope spec level": the RFC draft plus secondary votes A (per-scope superglobals) and B (per-scope default timezone and locale, above). Version 0.3 adds vote B to the polyfill.
 
 ## Tests
 
