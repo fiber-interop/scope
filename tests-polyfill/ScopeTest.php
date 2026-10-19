@@ -242,14 +242,12 @@ final class ScopeTest extends TestCase
             \fiber_interop\scope\activate();
         });
         \fiber_interop\scope\activate();
-        self::assertSame(['x' => 2], $_GET);
+        // the extension follows the scope itself (secondary vote A): the write stayed in the scope
+        self::assertSame(['x' => 1], $_GET);
     }
 
     public function testSuperglobalsArePerScopeAcrossRun(): void
     {
-        if (!IS_POLYFILL) {
-            self::markTestSkipped(self::SKIP_NATIVE);
-        }
         $_GET = ['who' => 'root']; $_POST = ['p' => 'root']; $_COOKIE = ['c' => 'root']; $_FILES = [];
         $a = new \Scope(); $b = new \Scope();
         $a->run(function () { self::assertSame(['who' => 'root'], $_GET); $_GET = ['who' => 'a']; $_POST = ['p' => 'a']; });
@@ -271,9 +269,6 @@ final class ScopeTest extends TestCase
 
     public function testNestedScopeStartsWithACopyAndDoesNotLeak(): void
     {
-        if (!IS_POLYFILL) {
-            self::markTestSkipped(self::SKIP_NATIVE);
-        }
         $_GET = ['who' => 'root'];
         $a = new \Scope();
         $a->run(function () {
