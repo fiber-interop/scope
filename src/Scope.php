@@ -57,13 +57,13 @@ final class Scope
     /** Whether ext/intl is loaded (Locale follows the scope); null until first use. */
     private static ?bool $intl = null;
 
-    /** The locale in effect when the first Scope was created: the start value of a new scope when intl.default_locale is empty. */
+    /** The locale a new scope starts with: intl.default_locale as configured at startup, else ICU's default. */
     private static ?string $startLocale = null;
 
     /**
      * A new scope starts empty: the six superglobal arrays are empty, there is no $_SESSION, and the
      * default timezone and (with ext/intl) locale come from ini (date.timezone, falling back to PHP's
-     * default "UTC"; intl.default_locale, falling back to the locale at first use), not from the
+     * default "UTC"; intl.default_locale as configured at startup, else ICU's default), not from the
      * creator. A record is [_GET, _POST, _COOKIE, _FILES, _REQUEST, _SERVER, timezone, locale, _SESSION|null].
      */
     public function __construct()
@@ -74,13 +74,17 @@ final class Scope
         // Force the JIT auto-globals into existence now, so a later-compiled read cannot re-arm the
         // engine's callback over a scope's array.
         $_GET; $_POST; $_COOKIE; $_FILES; $_REQUEST; $_SERVER;
-        self::$startLocale ??= self::$intl ? \Locale::getDefault() : null;
-        $locale = null;
-        if (self::$intl) {
-            $ini = (string) \ini_get('intl.default_locale');
-            $locale = $ini !== '' ? $ini : self::$startLocale;
+        if (self::$intl && self::$startLocale === null) {
+            // Locale::setDefault() writes the intl.default_locale ini entry, so the live value may be a
+            // creator's; the start value is the one the request began with (as configured, else ICU's).
+            $live = (string) \ini_get('intl.default_locale');
+            \ini_restore('intl.default_locale');
+            self::$startLocale = \Locale::getDefault();
+            if ($live !== '') {
+                \ini_set('intl.default_locale', $live);
+            }
         }
-        self::$globals[$this] = [[], [], [], [], [], [], (string) \ini_get('date.timezone') ?: 'UTC', $locale, null];
+        self::$globals[$this] = [[], [], [], [], [], [], (string) \ini_get('date.timezone') ?: 'UTC', self::$startLocale, null];
     }
 
     /**

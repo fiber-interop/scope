@@ -686,15 +686,16 @@ final class ScopeTest extends TestCase
         }
         $orig = \Locale::getDefault();
         try {
-            \Locale::setDefault('en_US');
+            $start = (new \Scope())->run(fn() => \Locale::getDefault());
+            \Locale::setDefault($start === 'de_DE' ? 'en_US' : 'de_DE');
+            $creator = \Locale::getDefault();
             $a = new \Scope();
-            \Locale::setDefault('de_DE');
             $b = new \Scope();
             $a->run(function () { \Locale::setDefault('nb_NO'); });
-            self::assertSame('de_DE', \Locale::getDefault());
+            self::assertSame($creator, \Locale::getDefault());
             self::assertSame('nb_NO', $a->run(fn() => \Locale::getDefault()));
-            self::assertSame('de_DE', $b->run(fn() => \Locale::getDefault()));
-            self::assertSame('de_DE', \Locale::getDefault());
+            self::assertSame($start, $b->run(fn() => \Locale::getDefault()));
+            self::assertSame($creator, \Locale::getDefault());
         } finally {
             \Locale::setDefault($orig);
         }
