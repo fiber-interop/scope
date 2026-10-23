@@ -12,7 +12,12 @@
  * Known gaps, closed by the extension: a raw fiber created in scope A and resumed from scope B without
  * $scope->run() sees B, and a generator sees the scope of whoever is iterating it.
  *
- * $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER are per scope: the live superglobals
+ * Sessions: ext/session's internal state (session id, status, save handler, open session) cannot be
+ * swapped from userland, so the session follows the scope only with the extension (ext-scope or
+ * ext-phasync). The polyfill swaps $_SESSION per scope only at switches where session_status() is
+ * PHP_SESSION_NONE (a new scope has no $_SESSION); while a session is active $_SESSION is left alone.
+ *
+ * $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER are per scope (a new scope's are empty): the live superglobals
  * belong to the active scope, every other scope's values are kept in $globals and swapped in by
  * switchTo(). $_SERVER and $_REQUEST are, like the other four, JIT auto-globals (created lazily on
  * first reference): the first scope creation forces them into existence by reading them below, the
@@ -37,28 +42,49 @@ final class Scope
     /** @var WeakMap<Scope, array>|null the six superglobals of each scope that is not active */
     private static ?WeakMap $globals = null;
 
+    /** @var WeakMap<Closure, Closure>|null the closure each bind() result wraps, so rebinding replaces the scope */
+    private static ?WeakMap $bound = null;
+
     /** The root's superglobals while it is not active (held strongly; the root never dies). */
     private static ?array $rootGlobals = null;
 
     /** Bumped by every switchTo() call; read through fiber_interop\scope\generation(). */
     private static int $generation = 0;
 
+    /** Whether ext/session is available; null until first use. */
+    private static ?bool $sessions = null;
+
     /** Whether ext/intl is loaded (Locale follows the scope); null until first use. */
     private static ?bool $intl = null;
 
+    /** The locale a new scope starts with: intl.default_locale as configured at startup, else ICU's default. */
+    private static ?string $startLocale = null;
+
     /**
-     * A new scope starts with copies of its creator's (the current scope's) superglobals, default
-     * timezone and (with ext/intl) default locale. A record is
-     * [_GET, _POST, _COOKIE, _FILES, _REQUEST, _SERVER, timezone, locale].
+     * A new scope starts empty: the six superglobal arrays are empty, there is no $_SESSION, and the
+     * default timezone and (with ext/intl) locale come from ini (date.timezone, falling back to PHP's
+     * default "UTC"; intl.default_locale as configured at startup, else ICU's default), not from the
+     * creator. A record is [_GET, _POST, _COOKIE, _FILES, _REQUEST, _SERVER, timezone, locale, _SESSION|null].
      */
     public function __construct()
     {
-        $creator = self::getCurrent();
+        self::getCurrent();
         self::$globals ??= new WeakMap();
         self::$intl ??= \class_exists(\Locale::class, false);
-        self::$globals[$this] = $creator === (self::$active ?? self::$root)
-            ? [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER, \date_default_timezone_get(), self::$intl ? \Locale::getDefault() : null]
-            : ($creator === self::$root ? self::$rootGlobals : self::$globals[$creator]);
+        // Force the JIT auto-globals into existence now, so a later-compiled read cannot re-arm the
+        // engine's callback over a scope's array.
+        $_GET; $_POST; $_COOKIE; $_FILES; $_REQUEST; $_SERVER;
+        if (self::$intl && self::$startLocale === null) {
+            // Locale::setDefault() writes the intl.default_locale ini entry, so the live value may be a
+            // creator's; the start value is the one the request began with (as configured, else ICU's).
+            $live = (string) \ini_get('intl.default_locale');
+            \ini_restore('intl.default_locale');
+            self::$startLocale = \Locale::getDefault();
+            if ($live !== '') {
+                \ini_set('intl.default_locale', $live);
+            }
+        }
+        self::$globals[$this] = [[], [], [], [], [], [], (string) \ini_get('date.timezone') ?: 'UTC', self::$startLocale, null];
     }
 
     /**
@@ -77,7 +103,10 @@ final class Scope
         self::$intl ??= \class_exists(\Locale::class, false);
         $tz = \date_default_timezone_get();
         $loc = self::$intl ? \Locale::getDefault() : null;
-        $rec = [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER, $tz, $loc];
+        // ext/session's state cannot be swapped from userland; $_SESSION is swapped only while no session is active.
+        self::$sessions ??= \function_exists('session_status');
+        $none = self::$sessions && \session_status() === \PHP_SESSION_NONE;
+        $rec = [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER, $tz, $loc, $none ? ($_SESSION ?? null) : null];
         if ($old === self::$root) {
             self::$rootGlobals = $rec;
         } else {
@@ -85,6 +114,13 @@ final class Scope
         }
         $rec = $scope === self::$root ? self::$rootGlobals : self::$globals[$scope];
         [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER] = $rec;
+        if ($none) {
+            if ($rec[8] === null) {
+                unset($_SESSION);
+            } else {
+                $_SESSION = $rec[8];
+            }
+        }
         if ($rec[6] !== $tz) {
             \date_default_timezone_set($rec[6]);
         }
@@ -128,6 +164,22 @@ final class Scope
             }
             self::switchTo($prev);
         }
+    }
+
+    /**
+     * Returns a closure that runs $closure with this scope current, whoever calls it, as run() does.
+     * $closure is unchanged. Binding a closure returned by bind() replaces its scope:
+     * $a->bind($b->bind($fn)) runs $fn in $a. Polyfill limit: the wrapper takes its arguments by value,
+     * so by-reference parameters of $closure are not preserved (the extension preserves them).
+     */
+    public function bind(Closure $closure): Closure
+    {
+        self::$bound ??= new WeakMap();
+        $closure = self::$bound[$closure] ?? $closure;
+        $scope = $this;
+        $wrapper = static fn(mixed ...$args): mixed => $scope->run($closure, ...$args);
+        self::$bound[$wrapper] = $closure;
+        return $wrapper;
     }
 
     /** The current scope: the top of this unit's run() stack; else the root in {main}, the active scope in a fiber. */

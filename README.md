@@ -48,7 +48,7 @@ It is a function, not a `Scope` method, because the polyfill class has exactly t
 `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` and `$_SERVER` are per scope:
 
 - The root scope's are the SAPI's (whatever they hold at first use).
-- A new scope starts with copies of its creator's six arrays (the scope current at `new Scope()`; copy-on-write, so this is free until written).
+- A new scope starts empty: the six arrays are `[]` (RFC 0.9; whoever creates the scope seeds it). Fibers that join a scope share its arrays. A reference taken with `$g = &$_GET` follows the live superglobal, so it sees writes by any fiber of the same scope but is not re-pointed when the scope changes.
 - Assignments inside a scope affect only that scope. Writing `$_GET = [...]` needs no call: it writes the live superglobal, which is captured into the scope's record at the next switch away.
 - `$_SERVER` and `$_REQUEST` are, like the other four, auto-globals created lazily on first reference; the first scope creation reads all six, which forces them into existence then, mirroring the native extension.
 
@@ -66,11 +66,19 @@ Under the native extension `activate()` exists and does nothing: per-scope super
 
 ## Per-scope default timezone and locale (polyfill)
 
-Secondary vote B: `date_default_timezone_get()/set()` and, when ext/intl is loaded, `Locale::getDefault()/setDefault()` follow the scope. The root has today's values, a new scope inherits its creator's at creation, and a change inside a scope affects only that scope.
+Secondary vote B: `date_default_timezone_get()/set()` and, when ext/intl is loaded, `Locale::getDefault()/setDefault()` follow the scope. The root has today's values, a new scope starts from ini (`date.timezone`, falling back to `UTC`; `intl.default_locale` as configured at startup, else ICU's default; `Locale::setDefault()` writes that ini entry, so the polyfill reads the startup value with `ini_restore()` once) rather than its creator's, and a change inside a scope affects only that scope.
 
-**Polyfill limitation.** Userland cannot intercept `date_default_timezone_set()` or `Locale::setDefault()` (the extension does, at engine level). The polyfill reconciles at switch points instead: when a scope is left, the live timezone and locale are read into that scope's record; when a scope is entered (`run()` entry/exit, or `activate()` when it really swaps) its values are applied, but only if they differ from the live ones. A change made and read within one scope with no switch in between is naturally correct, and other scopes see their own values after the next switch. Code that changes the timezone from a fiber switch the loop does not report through `activate()` can leak the value to a sibling until the next switch. A scope whose timezone was never set inherits the creator's *effective* value (the ini fallback resolved at creation), not "unset". `Locale::getDefault()` is ignored unless ext/intl is loaded before the first `Scope` is created.
+**Polyfill limitation.** Userland cannot intercept `date_default_timezone_set()` or `Locale::setDefault()` (the extension does, at engine level). The polyfill reconciles at switch points instead: when a scope is left, the live timezone and locale are read into that scope's record; when a scope is entered (`run()` entry/exit, or `activate()` when it really swaps) its values are applied, but only if they differ from the live ones. A change made and read within one scope with no switch in between is naturally correct, and other scopes see their own values after the next switch. Code that changes the timezone from a fiber switch the loop does not report through `activate()` can leak the value to a sibling until the next switch. `Locale::getDefault()` is ignored unless ext/intl is loaded before the first `Scope` is created.
 
 Cost: one `date_default_timezone_get()` (plus `Locale::getDefault()` with intl) and a string comparison per real switch, roughly 0.1-0.3 µs.
+
+## Sessions (extension only)
+
+**The session follows the scope only with the extension (ext-scope or ext-phasync).** ext/session's state (session id, status, save handler, the open session) cannot be swapped from userland, and `session_status()` cannot be set, so the polyfill does not fake it: one PHP session is process-wide. The only thing it does is swap `$_SESSION` between scopes at switches where `session_status()` is `PHP_SESSION_NONE`: a new scope has no `$_SESSION`. While a session is active, `$_SESSION` is left alone and shared by all scopes.
+
+## `Scope::bind()`
+
+`$scope->bind($closure)` returns a closure that runs `$closure` in `$scope` whoever calls it (`fn(...$args) => $scope->run($closure, ...$args)`), restoring the previous scope on return or throw; `$closure` is unchanged and keeps its own `$this` and class scope. **Polyfill limit:** by-reference parameters are not preserved (the extension's `bind()` keeps the closure's signature).
 
 ## For runtime authors: `generation()` (polyfill only, `@internal`)
 
@@ -88,6 +96,10 @@ A counter that strictly increases whenever the polyfill's active scope may have 
 - Whether it is in use is exposed through the `fiber_interop\scope\IS_POLYFILL` constant, never on the class.
 
 A project that declares its own global `Scope` class cannot install this package.
+
+## Release 0.4.0
+
+0.4.0 follows RFC 0.9: a new scope starts with empty superglobals and ini timezone/locale, and `Scope::bind()` is added. Sessions are extension-only (above).
 
 ## Release 0.3.0
 
