@@ -12,8 +12,11 @@
  * Known gaps, closed by the extension: a raw fiber created in scope A and resumed from scope B without
  * $scope->run() sees B, and a generator sees the scope of whoever is iterating it.
  *
- * $_GET, $_POST, $_COOKIE and $_FILES are per scope: the live superglobals belong to the active
- * scope, every other scope's values are kept in $globals and swapped in by switchTo().
+ * $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER are per scope: the live superglobals
+ * belong to the active scope, every other scope's values are kept in $globals and swapped in by
+ * switchTo(). $_SERVER and $_REQUEST are, like the other four, JIT auto-globals (created lazily on
+ * first reference): the first scope creation forces them into existence by reading them below, the
+ * same point at which the extension's scope_sg_live() forces its copy of the same six.
  */
 final class Scope
 {
@@ -31,7 +34,7 @@ final class Scope
     /** The scope whose values are in the live superglobals; null until first use (= the root). */
     private static ?Scope $active = null;
 
-    /** @var WeakMap<Scope, array>|null the four superglobals of each scope that is not active */
+    /** @var WeakMap<Scope, array>|null the six superglobals of each scope that is not active */
     private static ?WeakMap $globals = null;
 
     /** The root's superglobals while it is not active (held strongly; the root never dies). */
@@ -45,7 +48,8 @@ final class Scope
 
     /**
      * A new scope starts with copies of its creator's (the current scope's) superglobals, default
-     * timezone and (with ext/intl) default locale. A record is [_GET, _POST, _COOKIE, _FILES, timezone, locale].
+     * timezone and (with ext/intl) default locale. A record is
+     * [_GET, _POST, _COOKIE, _FILES, _REQUEST, _SERVER, timezone, locale].
      */
     public function __construct()
     {
@@ -53,7 +57,7 @@ final class Scope
         self::$globals ??= new WeakMap();
         self::$intl ??= \class_exists(\Locale::class, false);
         self::$globals[$this] = $creator === (self::$active ?? self::$root)
-            ? [$_GET, $_POST, $_COOKIE, $_FILES, \date_default_timezone_get(), self::$intl ? \Locale::getDefault() : null]
+            ? [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER, \date_default_timezone_get(), self::$intl ? \Locale::getDefault() : null]
             : ($creator === self::$root ? self::$rootGlobals : self::$globals[$creator]);
     }
 
@@ -73,19 +77,19 @@ final class Scope
         self::$intl ??= \class_exists(\Locale::class, false);
         $tz = \date_default_timezone_get();
         $loc = self::$intl ? \Locale::getDefault() : null;
-        $rec = [$_GET, $_POST, $_COOKIE, $_FILES, $tz, $loc];
+        $rec = [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER, $tz, $loc];
         if ($old === self::$root) {
             self::$rootGlobals = $rec;
         } else {
             self::$globals[$old] = $rec;
         }
         $rec = $scope === self::$root ? self::$rootGlobals : self::$globals[$scope];
-        [$_GET, $_POST, $_COOKIE, $_FILES] = $rec;
-        if ($rec[4] !== $tz) {
-            \date_default_timezone_set($rec[4]);
+        [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER] = $rec;
+        if ($rec[6] !== $tz) {
+            \date_default_timezone_set($rec[6]);
         }
-        if ($rec[5] !== $loc && $loc !== null) {
-            \Locale::setDefault($rec[5]);
+        if ($rec[7] !== $loc && $loc !== null) {
+            \Locale::setDefault($rec[7]);
         }
         self::$active = $scope;
     }

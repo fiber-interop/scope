@@ -45,11 +45,12 @@ It is a function, not a `Scope` method, because the polyfill class has exactly t
 
 ## Per-scope superglobals (polyfill)
 
-`$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` are per scope:
+`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` and `$_SERVER` are per scope:
 
 - The root scope's are the SAPI's (whatever they hold at first use).
-- A new scope starts with copies of its creator's four arrays (the scope current at `new Scope()`; copy-on-write, so this is free until written).
+- A new scope starts with copies of its creator's six arrays (the scope current at `new Scope()`; copy-on-write, so this is free until written).
 - Assignments inside a scope affect only that scope. Writing `$_GET = [...]` needs no call: it writes the live superglobal, which is captured into the scope's record at the next switch away.
+- `$_SERVER` and `$_REQUEST` are, like the other four, auto-globals created lazily on first reference; the first scope creation reads all six, which forces them into existence then, mirroring the native extension.
 
 The live superglobals belong to the *active* scope. Switching is done by one function:
 
@@ -57,7 +58,7 @@ The live superglobals belong to the *active* scope. Switching is done by one fun
 function fiber_interop\scope\activate(): void
 ```
 
-It compares the scope it last activated with `Scope::getCurrent()`. If they are the same it returns: one comparison, no work. Otherwise it stores the four live values into the previously active scope's record and loads the current scope's. `Scope::run()` calls it on entry and on exit, so `run()` restores the previous scope's globals when it returns. Records live in a `WeakMap` keyed by the `Scope` object and die with it; the root's record is held strongly.
+It compares the scope it last activated with `Scope::getCurrent()`. If they are the same it returns: one comparison, no work. Otherwise it stores the six live values into the previously active scope's record and loads the current scope's. `Scope::run()` calls it on entry and on exit, so `run()` restores the previous scope's globals when it returns. Records live in a `WeakMap` keyed by the `Scope` object and die with it; the root's record is held strongly.
 
 The invariant: **the active scope equals the current scope whenever user code runs.** `run()` keeps it within one execution unit; the event loop keeps it across switches. Adapters call `activate()` whenever the loop hands control to user code: at task start, after a resume, before a queued callback, and after `run()` returns to `{main}`. Calling it on every transfer is cheap, since a swap only happens on a real change of scope. Coverage therefore depends on the adapter; see the scope-state column of the [conformance table](https://fiber-interop.github.io/conformance.html).
 

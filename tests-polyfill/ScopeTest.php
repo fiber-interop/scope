@@ -222,12 +222,12 @@ final class ScopeTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->savedGlobals = [$_GET, $_POST, $_COOKIE, $_FILES];
+        $this->savedGlobals = [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER];
     }
 
     protected function tearDown(): void
     {
-        [$_GET, $_POST, $_COOKIE, $_FILES] = $this->savedGlobals;
+        [$_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST, $_SERVER] = $this->savedGlobals;
     }
 
     public function testActivateExistsAndIsANoOpUnderTheExtension(): void
@@ -283,6 +283,88 @@ final class ScopeTest extends TestCase
             $child->run(fn() => self::assertSame(['who' => 'child', 'extra' => 1], $_GET));
         });
         self::assertSame(['who' => 'root'], $_GET);
+    }
+
+    public function testRequestAndServerArePerScopeAcrossRun(): void
+    {
+        $_REQUEST = ['who' => 'root']; $_SERVER['who'] = 'root';
+        $a = new \Scope(); $b = new \Scope();
+        $a->run(function () { self::assertSame('root', $_SERVER['who']); $_REQUEST = ['who' => 'a']; $_SERVER['who'] = 'a'; });
+        $b->run(function () { self::assertSame('root', $_SERVER['who']); $_REQUEST = ['who' => 'b']; $_SERVER['who'] = 'b'; });
+        $a->run(function () {
+            self::assertSame(['who' => 'a'], $_REQUEST);
+            self::assertSame('a', $_SERVER['who']);
+        });
+        $b->run(function () {
+            self::assertSame(['who' => 'b'], $_REQUEST);
+            self::assertSame('b', $_SERVER['who']);
+        });
+        self::assertSame(['who' => 'root'], $_REQUEST, 'main sees the root values after the outermost run()');
+        self::assertSame('root', $_SERVER['who']);
+    }
+
+    public function testNestedScopeServerStartsWithACopyAndDoesNotLeak(): void
+    {
+        // "argv" is the SAPI's: present before any scope exists, which is what "environment
+        // entries present" means for $_SERVER.
+        self::assertTrue(isset($_SERVER['argv']));
+        $_SERVER['who'] = 'root';
+        $a = new \Scope();
+        $a->run(function () {
+            self::assertTrue(isset($_SERVER['argv']), 'the environment came along with the copy');
+            $_SERVER['who'] = 'a';
+            $child = new \Scope();
+            $child->run(function () {
+                self::assertSame('a', $_SERVER['who'], 'inherits a copy of its creator');
+                $_SERVER['who'] = 'child';
+            });
+            self::assertSame('a', $_SERVER['who'], 'the child write does not leak to the parent');
+            $child->run(fn() => self::assertSame('child', $_SERVER['who']));
+        });
+        self::assertSame('root', $_SERVER['who']);
+    }
+
+    public function testServerAndRequestAlternateAcrossFiberSuspension(): void
+    {
+        // A fiber joins the scope current at its construction (RFC); wrapping every start()/resume()
+        // in the owning scope's run() too (as testRunScopeIsKeptPerFiberAcrossSuspension does) is
+        // what keeps the live arrays right across the suspension in between under the polyfill,
+        // whose simpler model does not tie a fiber to its construction scope on its own.
+        $_SERVER['v'] = 'root'; $_REQUEST['v'] = 'root';
+        $a = new \Scope(); $b = new \Scope();
+        $fa = $a->run(fn() => new \Fiber(function () {
+            $_SERVER['v'] = 'A'; $_REQUEST['v'] = 'A';
+            \Fiber::suspend();
+            self::assertSame('A', $_SERVER['v']);
+            self::assertSame('A', $_REQUEST['v']);
+        }));
+        $fb = $b->run(fn() => new \Fiber(function () {
+            $_SERVER['v'] = 'B'; $_REQUEST['v'] = 'B';
+            \Fiber::suspend();
+            self::assertSame('B', $_SERVER['v']);
+            self::assertSame('B', $_REQUEST['v']);
+        }));
+        $a->run(fn() => $fa->start());
+        $b->run(fn() => $fb->start());
+        self::assertSame('root', $_SERVER['v']);
+        self::assertSame('root', $_REQUEST['v']);
+        $a->run(fn() => $fa->resume());
+        $b->run(fn() => $fb->resume());
+        self::assertTrue($fa->isTerminated() && $fb->isTerminated());
+        self::assertSame('root', $_SERVER['v']);
+        self::assertSame('root', $_REQUEST['v']);
+    }
+
+    public function testGlobalsArrayAndGlobalKeywordFollowServer(): void
+    {
+        $_SERVER['v'] = 'root';
+        $s = new \Scope();
+        $s->run(function () {
+            $GLOBALS['_SERVER']['v'] = 'child-via-GLOBALS';
+            self::assertSame('child-via-GLOBALS', (function () { global $_SERVER; return $_SERVER['v']; })());
+        });
+        self::assertSame('root', $_SERVER['v']);
+        self::assertSame('root', $GLOBALS['_SERVER']['v']);
     }
 
     public function testActivateSwitchesWithAProviderDrivenKey(): void
