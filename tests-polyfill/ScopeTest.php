@@ -625,6 +625,16 @@ final class ScopeTest extends TestCase
         self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
     }
 
+    public function testBindingABoundClosureReplacesItsScope(): void
+    {
+        $a = new \Scope(); $b = new \Scope();
+        $inB = $b->bind(fn() => \Scope::getCurrent());
+        $inA = $a->bind($inB);
+        self::assertSame($a, $inA());
+        self::assertSame($b, $inB());
+        self::assertSame($b, $b->bind($inA)());
+    }
+
     public function testBindKeepsByReferenceParameters(): void
     {
         if (IS_POLYFILL) {

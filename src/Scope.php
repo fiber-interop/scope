@@ -42,6 +42,9 @@ final class Scope
     /** @var WeakMap<Scope, array>|null the six superglobals of each scope that is not active */
     private static ?WeakMap $globals = null;
 
+    /** @var WeakMap<Closure, Closure>|null the closure each bind() result wraps, so rebinding replaces the scope */
+    private static ?WeakMap $bound = null;
+
     /** The root's superglobals while it is not active (held strongly; the root never dies). */
     private static ?array $rootGlobals = null;
 
@@ -161,13 +164,18 @@ final class Scope
 
     /**
      * Returns a closure that runs $closure with this scope current, whoever calls it, as run() does.
-     * $closure is unchanged. Polyfill limit: the wrapper takes its arguments by value, so by-reference
-     * parameters of $closure are not preserved (the extension preserves them).
+     * $closure is unchanged. Binding a closure returned by bind() replaces its scope:
+     * $a->bind($b->bind($fn)) runs $fn in $a. Polyfill limit: the wrapper takes its arguments by value,
+     * so by-reference parameters of $closure are not preserved (the extension preserves them).
      */
     public function bind(Closure $closure): Closure
     {
+        self::$bound ??= new WeakMap();
+        $closure = self::$bound[$closure] ?? $closure;
         $scope = $this;
-        return static fn(mixed ...$args): mixed => $scope->run($closure, ...$args);
+        $wrapper = static fn(mixed ...$args): mixed => $scope->run($closure, ...$args);
+        self::$bound[$wrapper] = $closure;
+        return $wrapper;
     }
 
     /** The current scope: the top of this unit's run() stack; else the root in {main}, the active scope in a fiber. */
