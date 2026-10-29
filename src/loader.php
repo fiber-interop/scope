@@ -103,8 +103,8 @@ if (IS_POLYFILL) {
      * can change it with $scope->run(). Reading this at resume and at suspend and calling
      * Scope::getCurrent() only when it moved avoids that call on most switches.
      *
-     * Declared only when the polyfill is in use: the extension tracks the scope per fiber and never saves
-     * or restores it, so loops read Fiber::getScope() there instead.
+     * Declared only when the polyfill is in use: the extension keeps each fiber's scope across its
+     * suspensions itself, so loops need not track it there.
      */
     function generation(): int
     {

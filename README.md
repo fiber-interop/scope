@@ -26,9 +26,9 @@ The loader (`src/loader.php`, autoloaded by Composer) picks one at load time:
 
 ## Polyfill gaps
 
-The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. `{main}` outside any `run()` sees the root scope. A fiber with no `run()` of its own sees the scope most recently made current, by `run()` entry or exit or by `fiber_interop\scope\activate()`; so a fiber created and driven inside a request's `run()` keeps the request's scope without anyone's cooperation. It cannot add `Fiber::getScope()` or `Generator::getScope()`, and has two gaps the extension closes:
+The polyfill keeps a stack of `run()` scopes per fiber (a `WeakMap` keyed by the fiber) plus one for `{main}`. `{main}` outside any `run()` sees the root scope. A fiber with no `run()` of its own sees the scope most recently made current, by `run()` entry or exit or by `fiber_interop\scope\activate()`; so a fiber started and driven inside a request's `run()` keeps the request's scope without anyone's cooperation. As the RFC says, a fiber runs in the scope it is started in, not the one it is constructed in, and `new Fiber($scope->bind($fn))` runs in `$scope` whoever starts it. It cannot add `Generator::getScope()`, and has two gaps the extension closes:
 
-- A raw fiber created in scope A and resumed from scope B, without `$scope->run()` inside it, sees B (the engine says A). Libraries close this by capturing `Scope::getCurrent()` when they create a fiber and calling `$scope->run(...)` inside it.
+- A raw fiber started in scope A and resumed from scope B, without `$scope->run()` inside it, sees B (the engine says A). Libraries close this by binding the closure they give the fiber: `new Fiber(Scope::getCurrent()->bind($fn))`.
 - A generator sees the scope of the code iterating it (the consumer), not the scope current when it was created.
 
 ## Execution key provider (polyfill only)
@@ -86,7 +86,7 @@ Cost: one `date_default_timezone_get()` (plus `Locale::getDefault()` with intl) 
 function fiber_interop\scope\generation(): int
 ```
 
-A counter that strictly increases whenever the polyfill's active scope may have changed: on every `Scope::run()` entry and exit (including exit by exception, and including a `run()` that returns to the scope it left) and whenever `activate()` swaps scopes. It exists because a userland loop must know each coroutine's current scope at every suspend: the coroutine can change it with `$scope->run()`. Loops read `generation()` at resume and at suspend, and call `Scope::getCurrent()` only when it moved. It is not part of the Scope RFC and is declared only when `IS_POLYFILL` is `true`: under ext-scope the engine tracks the scope per fiber and never saves or restores it, so loops read `Fiber::getScope()` there instead.
+A counter that strictly increases whenever the polyfill's active scope may have changed: on every `Scope::run()` entry and exit (including exit by exception, and including a `run()` that returns to the scope it left) and whenever `activate()` swaps scopes. It exists because a userland loop must know each coroutine's current scope at every suspend: the coroutine can change it with `$scope->run()`. Loops read `generation()` at resume and at suspend, and call `Scope::getCurrent()` only when it moved. It is not part of the Scope RFC and is declared only when `IS_POLYFILL` is `true`: under ext-scope the engine keeps each fiber's scope across its suspensions, so loops need not track it there.
 
 ## Polyfill rules
 
@@ -96,6 +96,10 @@ A counter that strictly increases whenever the polyfill's active scope may have 
 - Whether it is in use is exposed through the `fiber_interop\scope\IS_POLYFILL` constant, never on the class.
 
 A project that declares its own global `Scope` class cannot install this package.
+
+## Release 0.5.0
+
+0.5.0 follows RFC 0.10: a fiber runs in the scope current where `start()` is called, and constructing it captures nothing. The polyfill never tied a fiber to its construction scope, so the change is in the tests, the documentation and the extension it is tested against (ext-scope 0.6.0, which also removes `Fiber::getScope()`). `new Fiber($scope->bind($fn))` gives a fiber a fixed scope.
 
 ## Release 0.4.0
 

@@ -22,7 +22,8 @@ final class ScopeTest extends TestCase
     {
         $c = new \ReflectionClass(\Scope::class);
         self::assertTrue($c->isFinal());
-        $methods = array_map(fn($m) => $m->getName(), array_filter($c->getMethods(\ReflectionMethod::IS_PUBLIC), fn($m) => !in_array($m->getName(), ['__clone', '__serialize', '__unserialize'])));
+        // __run_without() is the extension's, not part of the RFC
+        $methods = array_map(fn($m) => $m->getName(), array_filter($c->getMethods(\ReflectionMethod::IS_PUBLIC), fn($m) => !in_array($m->getName(), ['__clone', '__serialize', '__unserialize', '__run_without'])));
         sort($methods);
         self::assertSame(['__construct', 'bind', 'getCurrent', 'getRootScope', 'run'], $methods);
         self::assertSame('Scope', (string) $c->getMethod('getCurrent')->getReturnType());
@@ -41,11 +42,58 @@ final class ScopeTest extends TestCase
         self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
     }
 
-    public function testFiberConstructedInMainSeesRoot(): void
+    public function testFiberStartedInMainSeesRoot(): void
     {
         $seen = null;
         (new \Fiber(function () use (&$seen) { $seen = \Scope::getCurrent(); }))->start();
         self::assertSame(\Scope::getRootScope(), $seen);
+    }
+
+    public function testFiberRunsInTheScopeItIsStartedInNotConstructedIn(): void
+    {
+        $a = new \Scope(); $b = new \Scope();
+        $f = $a->run(fn() => new \Fiber(fn() => \Scope::getCurrent()));
+        $b->run(fn() => $f->start());
+        self::assertSame($b, $f->getReturn());
+        $f = $a->run(fn() => new \Fiber(fn() => \Scope::getCurrent()));
+        $f->start();
+        self::assertSame(\Scope::getRootScope(), $f->getReturn());
+    }
+
+    public function testFiberOfABoundClosureRunsInItsScopeWhoeverStartsAndResumesIt(): void
+    {
+        $a = new \Scope(); $b = new \Scope();
+        $f = new \Fiber($a->bind(fn() => \Scope::getCurrent()));
+        $f->start();
+        self::assertSame($a, $f->getReturn());
+        $f = new \Fiber($a->bind(function () {
+            $seen = [\Scope::getCurrent()];
+            \Fiber::suspend();
+            $seen[] = \Scope::getCurrent();
+            return $seen;
+        }));
+        $b->run(fn() => $f->start());
+        $b->run(fn() => $f->resume());
+        self::assertSame([$a, $a], $f->getReturn());
+        self::assertSame(\Scope::getRootScope(), \Scope::getCurrent());
+    }
+
+    public function testFiberSuspendedInsideRunIsBackInItsStartScopeAfterThatRun(): void
+    {
+        $a = new \Scope(); $b = new \Scope(); $c = new \Scope();
+        $f = new \Fiber(function () use ($c) {
+            $seen = [$c->run(function () { \Fiber::suspend(); return \Scope::getCurrent(); })];
+            $seen[] = \Scope::getCurrent();
+            return $seen;
+        });
+        $a->run(fn() => $f->start());
+        $b->run(fn() => $f->resume());
+        self::assertSame([$c, $a], $f->getReturn());
+    }
+
+    public function testThereIsNoFiberGetScope(): void
+    {
+        self::assertFalse(method_exists(\Fiber::class, 'getScope'));
     }
 
     public function testRunNestsReturnsAndRestores(): void
@@ -103,11 +151,8 @@ final class ScopeTest extends TestCase
 
     public function testCooperatingLibraryCarriesScopeIntoFiber(): void
     {
-        // What go() and the adapters do: capture at construction, run() inside.
-        $spawn = function (\Closure $fn): \Fiber {
-            $scope = \Scope::getCurrent();
-            return new \Fiber(fn() => $scope->run($fn));
-        };
+        // A library that hands its fibers to something that starts them from another scope binds them.
+        $spawn = fn(\Closure $fn): \Fiber => new \Fiber(\Scope::getCurrent()->bind($fn));
         $a = new \Scope();
         $f = $a->run(fn() => $spawn(fn() => \Scope::getCurrent()));
         (new \Scope())->run(fn() => $f->start());
@@ -122,7 +167,7 @@ final class ScopeTest extends TestCase
         self::assertNull($w->get());
     }
 
-    public function testFiberConstructedAndDrivenInsideRunKeepsTheScope(): void
+    public function testFiberStartedAndDrivenInsideRunKeepsTheScope(): void
     {
         // Polyfill: an unknown fiber resolves to the active scope (the one run() made current).
         $a = new \Scope();
@@ -137,7 +182,7 @@ final class ScopeTest extends TestCase
     public function testGapRawFiberResumedFromAnotherScope(): void
     {
         $a = new \Scope(); $b = new \Scope();
-        $f = $a->run(fn() => new \Fiber(function () { \Fiber::suspend(); return \Scope::getCurrent(); }));
+        $f = new \Fiber(function () { \Fiber::suspend(); return \Scope::getCurrent(); });
         $a->run(fn() => $f->start());
         $b->run(fn() => $f->resume());
         if (!IS_POLYFILL) {
@@ -145,7 +190,7 @@ final class ScopeTest extends TestCase
             return;
         }
         self::assertSame($b, $f->getReturn());
-        self::markTestSkipped('Polyfill gap: a fiber with no run() of its own sees the scope most recently made current, so a raw fiber created in scope A and resumed from scope B without $scope->run() sees B. The extension closes this gap.');
+        self::markTestSkipped('Polyfill gap: a fiber with no run() of its own sees the scope most recently made current, so a raw fiber started in scope A and resumed from scope B without $scope->run() sees B. The extension closes this gap.');
     }
 
     public function testGapGeneratorSeesConsumerScope(): void
@@ -326,10 +371,10 @@ final class ScopeTest extends TestCase
 
     public function testServerAndRequestAlternateAcrossFiberSuspension(): void
     {
-        // A fiber joins the scope current at its construction (RFC); wrapping every start()/resume()
-        // in the owning scope's run() too (as testRunScopeIsKeptPerFiberAcrossSuspension does) is
-        // what keeps the live arrays right across the suspension in between under the polyfill,
-        // whose simpler model does not tie a fiber to its construction scope on its own.
+        // A fiber runs in the scope it is started in (RFC); wrapping its resume() in that scope's
+        // run() too (as testRunScopeIsKeptPerFiberAcrossSuspension does) is what keeps the live
+        // arrays right across the suspension in between under the polyfill, whose simpler model
+        // does not tie a fiber to its start scope on its own.
         $_SERVER['v'] = 'root'; $_REQUEST['v'] = 'root';
         $a = new \Scope(); $b = new \Scope();
         $fa = $a->run(fn() => new \Fiber(function () {
@@ -353,6 +398,21 @@ final class ScopeTest extends TestCase
         self::assertTrue($fa->isTerminated() && $fb->isTerminated());
         self::assertSame('root', $_SERVER['v']);
         self::assertSame('root', $_REQUEST['v']);
+    }
+
+    public function testFiberSeesTheSuperglobalsOfItsStartScope(): void
+    {
+        $_GET = ['who' => 'root'];
+        $a = new \Scope(); $b = new \Scope();
+        $a->run(function () { $_GET = ['who' => 'A']; });
+        $b->run(function () { $_GET = ['who' => 'B']; });
+        $f = $a->run(fn() => new \Fiber(fn() => $_GET['who']));
+        $b->run(fn() => $f->start());
+        self::assertSame('B', $f->getReturn());
+        $f = new \Fiber($a->bind(fn() => $_GET['who']));
+        $b->run(fn() => $f->start());
+        self::assertSame('A', $f->getReturn());
+        self::assertSame('root', $_GET['who']);
     }
 
     public function testGlobalsArrayAndGlobalKeywordFollowServer(): void

@@ -9,8 +9,9 @@
  * returns) to a stack of the scopes it entered with run(), plus one stack for {main}. A unit other
  * than {main} with no stack entry sees the active scope: the one most recently made current by run()
  * entry or exit or by fiber_interop\scope\activate().
- * Known gaps, closed by the extension: a raw fiber created in scope A and resumed from scope B without
- * $scope->run() sees B, and a generator sees the scope of whoever is iterating it.
+ * A fiber therefore runs in the scope it is started in, as the RFC says; new Fiber($scope->bind($fn))
+ * runs in $scope. Known gaps, closed by the extension: a raw fiber started in scope A and resumed from
+ * scope B without $scope->run() sees B, and a generator sees the scope of whoever is iterating it.
  *
  * Sessions: ext/session's internal state (session id, status, save handler, open session) cannot be
  * swapped from userland, so the session follows the scope only with the extension (ext-scope or
