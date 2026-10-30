@@ -67,7 +67,8 @@ function set_execution_key_provider(?callable $provider): void
 }
 
 /**
- * Polyfill only: makes the live $_GET, $_POST, $_COOKIE and $_FILES those of Scope::getCurrent().
+ * Polyfill only: makes the live $_GET, $_POST, $_COOKIE, $_FILES, $_REQUEST and $_SERVER, the default
+ * timezone and locale, and $_SESSION while no session is active, those of Scope::getCurrent().
  *
  * If the current scope is the one last activated, it returns (one comparison). Otherwise it saves the
  * live values into the previously active scope and loads the current scope's. Scope::run() calls it on

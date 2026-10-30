@@ -1,6 +1,6 @@
 # fiber-interop/scope
 
-`Scope` identifies the logical operation (an HTTP request, a queued job, a transaction) that code belongs to, and keeps that identity across fibers and generators. It is the class from the [PHP RFC: Scope](https://wiki.php.net/rfc/scope). This package gives you that class on PHP 8.1+: the native extension [`fiber-interop/ext-scope`](../ext-scope) when available, otherwise a userland polyfill. See the RFC and the extension for the API, the rules and the cost.
+`Scope` identifies the logical operation (an HTTP request, a queued job, a transaction) that code belongs to, and keeps that identity across fibers and generators. It is the class from the [PHP RFC: Scope](https://wiki.php.net/rfc/scope). This package gives you that class on PHP 8.1+: the native extension [`fiber-interop/ext-scope`](https://github.com/fiber-interop/ext-scope) (also bundled in [ext-phasync](https://github.com/phasync/ext-phasync)) when available, otherwise a userland polyfill. See the RFC and the extension for the API, the rules and the cost.
 
 ```php
 $scope = new Scope();
@@ -21,7 +21,7 @@ composer require fiber-interop/scope
 The loader (`src/loader.php`, autoloaded by Composer) picks one at load time:
 
 1. A `Scope` class already exists (ext-scope loaded via php.ini or `-d extension=`, or a future PHP with `Scope` in core): it is used, and `fiber_interop\scope\IS_POLYFILL` is `false`.
-2. Opted in, on the CLI, with `pcntl_exec` available and a bundled binary for the running PHP build in `ext/` (`scope-<8.x>-<nts|zts>-<arch>-<glibc|musl|darwin>.so`): PHP re-executes itself with `-d extension=<binary>`. Opt in with the environment variable `FIBER_INTEROP_SCOPE_EXT=1`, or `"extra": {"fiber-interop/scope": {"ext": true}}` in the root `composer.json`. `FIBER_INTEROP_SCOPE_SO` points at a binary elsewhere. `FIBER_INTEROP_SCOPE_REEXEC=1` is set in the child so it never re-executes twice; if the binary fails to load, the child falls back to the polyfill.
+2. Opted in, on the CLI, with `pcntl_exec` available and a binary of ext-scope for the running PHP build: PHP re-executes itself with `-d extension=<binary>`. Opt in with the environment variable `FIBER_INTEROP_SCOPE_EXT=1`, or `"extra": {"fiber-interop/scope": {"ext": true}}` in the root `composer.json`. The binary is `FIBER_INTEROP_SCOPE_SO`, else `ext/scope-<8.x>-<nts|zts>-<arch>-<glibc|musl|darwin>.so` in this package. The package ships no binaries: build ext-scope, or place one there when you package an application. `FIBER_INTEROP_SCOPE_REEXEC=1` is set in the child so it never re-executes twice; if the binary fails to load, the child falls back to the polyfill.
 3. Otherwise the polyfill in `src/Scope.php` is declared and `IS_POLYFILL` is `true`.
 
 ## Polyfill gaps
@@ -88,10 +88,14 @@ function fiber_interop\scope\generation(): int
 
 A counter that strictly increases whenever the polyfill's active scope may have changed: on every `Scope::run()` entry and exit (including exit by exception, and including a `run()` that returns to the scope it left) and whenever `activate()` swaps scopes. It exists because a userland loop must know each coroutine's current scope at every suspend: the coroutine can change it with `$scope->run()`. Loops read `generation()` at resume and at suspend, and call `Scope::getCurrent()` only when it moved. It is not part of the Scope RFC and is declared only when `IS_POLYFILL` is `true`: under ext-scope the engine keeps each fiber's scope across its suspensions, so loops need not track it there.
 
+## Extension only: `Scope::__run_without()`
+
+ext-scope has one method outside the RFC, `Scope::__run_without()`, for event loops that run in a scope of their own (see the extension's README). The polyfill does not declare it: a loop on the polyfill keeps scope state with `activate()` instead, and checks `method_exists(Scope::class, '__run_without')` before using it.
+
 ## Polyfill rules
 
 - It declares nothing if a `Scope` class already exists.
-- It has exactly the extension's names and signatures and no extra methods; new methods go into the RFC and the extension first.
+- It has exactly the RFC's names and signatures and no extra methods; new methods go into the RFC and the extension first.
 - It does not `provide` `ext-scope`.
 - Whether it is in use is exposed through the `fiber_interop\scope\IS_POLYFILL` constant, never on the class.
 

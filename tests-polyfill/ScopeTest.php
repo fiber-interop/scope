@@ -29,7 +29,8 @@ final class ScopeTest extends TestCase
         self::assertSame('Scope', (string) $c->getMethod('getCurrent')->getReturnType());
         self::assertSame('Scope', (string) $c->getMethod('getRootScope')->getReturnType());
         self::assertSame('mixed', (string) $c->getMethod('run')->getReturnType());
-        self::assertSame(\extension_loaded('scope') === false, IS_POLYFILL);
+        // Native from ext-scope, or from ext-phasync, which bundles it
+        self::assertSame(!$c->isInternal(), IS_POLYFILL);
     }
 
     public function testRootIsIdenticalAcrossCalls(): void
