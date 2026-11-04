@@ -101,6 +101,10 @@ ext-scope has one method outside the RFC, `Scope::__run_without()`, for event lo
 
 A project that declares its own global `Scope` class cannot install this package.
 
+## Release 0.6.0
+
+0.6.0 is 0.5.0 with the version number of the extension it pairs with: from here on this package and [ext-scope](https://github.com/fiber-interop/ext-scope) are released together under the same version, so "scope 0.6" means both. No code change.
+
 ## Release 0.5.0
 
 0.5.0 follows RFC 0.10: a fiber runs in the scope current where `start()` is called, and constructing it captures nothing. The polyfill never tied a fiber to its construction scope, so the change is in the tests, the documentation and the extension it is tested against (ext-scope 0.6.0, which also removes `Fiber::getScope()`). `new Fiber($scope->bind($fn))` gives a fiber a fixed scope.
