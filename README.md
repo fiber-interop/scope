@@ -101,6 +101,10 @@ ext-scope has one method outside the RFC, `Scope::__run_without()`, for event lo
 
 A project that declares its own global `Scope` class cannot install this package.
 
+## Release 0.6.1
+
+0.6.1 pairs with [ext-scope 0.6.1](https://github.com/fiber-interop/ext-scope), which fixes a hang on PHP 8.2 to 8.4 when a scope unsets a request superglobal. No code change in the polyfill. A new scope starts empty, as in 0.6.0.
+
 ## Release 0.6.0
 
 0.6.0 is 0.5.0 with the version number of the extension it pairs with: from here on this package and [ext-scope](https://github.com/fiber-interop/ext-scope) are released together under the same version, so "scope 0.6" means both. No code change.
