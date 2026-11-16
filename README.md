@@ -48,7 +48,7 @@ It is a function, not a `Scope` method, because the polyfill class has exactly t
 `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` and `$_SERVER` are per scope:
 
 - The root scope's are the SAPI's (whatever they hold at first use).
-- A new scope starts as a copy of the scope current when it is constructed (RFC 0.10): PHP array copies of the six arrays, independent afterwards, with objects in them shared; constructed from the root scope under the CLI that is the CLI's arrays. A server constructs the request's scope from its loop in the root scope and fills the arrays in. There is no option to start empty; code that wants less assigns or unsets. Fibers that join a scope share its arrays. A reference taken with `$g = &$_GET` follows the live superglobal, so it sees writes by any fiber of the same scope but is not re-pointed when the scope changes.
+- A new scope starts empty: the six arrays are `[]` (RFC 0.9; whoever creates the scope seeds it). Fibers that join a scope share its arrays. A reference taken with `$g = &$_GET` follows the live superglobal, so it sees writes by any fiber of the same scope but is not re-pointed when the scope changes.
 - Assignments inside a scope affect only that scope. Writing `$_GET = [...]` needs no call: it writes the live superglobal, which is captured into the scope's record at the next switch away.
 - `$_SERVER` and `$_REQUEST` are, like the other four, auto-globals created lazily on first reference; the first scope creation reads all six, which forces them into existence then, mirroring the native extension.
 
@@ -66,7 +66,7 @@ Under the native extension `activate()` exists and does nothing: per-scope super
 
 ## Per-scope default timezone and locale (polyfill)
 
-Secondary vote B: `date_default_timezone_get()/set()` and, when ext/intl is loaded, `Locale::getDefault()/setDefault()` follow the scope. The root has today's values, a new scope starts with a copy of its creator's current values (the scope current when it is constructed), and a change inside a scope affects only that scope. A new scope also gets a copy of its creator's `$_SESSION` array (the session itself is extension-only). Limit: userland cannot tell "never set" from "set to the ini value", so a copy of a scope that never set a timezone holds the resolved value and does not follow a later `ini_set('date.timezone')`; the extension does.
+Secondary vote B: `date_default_timezone_get()/set()` and, when ext/intl is loaded, `Locale::getDefault()/setDefault()` follow the scope. The root has today's values, a new scope starts from ini (`date.timezone`, falling back to `UTC`; `intl.default_locale` as configured at startup, else ICU's default; `Locale::setDefault()` writes that ini entry, so the polyfill reads the startup value with `ini_restore()` once) rather than its creator's, and a change inside a scope affects only that scope.
 
 **Polyfill limitation.** Userland cannot intercept `date_default_timezone_set()` or `Locale::setDefault()` (the extension does, at engine level). The polyfill reconciles at switch points instead: when a scope is left, the live timezone and locale are read into that scope's record; when a scope is entered (`run()` entry/exit, or `activate()` when it really swaps) its values are applied, but only if they differ from the live ones. A change made and read within one scope with no switch in between is naturally correct, and other scopes see their own values after the next switch. Code that changes the timezone from a fiber switch the loop does not report through `activate()` can leak the value to a sibling until the next switch. `Locale::getDefault()` is ignored unless ext/intl is loaded before the first `Scope` is created.
 
@@ -100,10 +100,6 @@ ext-scope has one method outside the RFC, `Scope::__run_without()`, for event lo
 - Whether it is in use is exposed through the `fiber_interop\scope\IS_POLYFILL` constant, never on the class.
 
 A project that declares its own global `Scope` class cannot install this package.
-
-## Unreleased
-
-Implements the copy rule of RFC 0.10: a new scope starts as a copy of the scope current at `new Scope()` (the six arrays, `$_SESSION`, the default timezone and locale) instead of empty / from ini. See "Per-scope superglobals" and "Per-scope default timezone and locale".
 
 ## Release 0.6.0
 

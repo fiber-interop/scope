@@ -296,16 +296,16 @@ final class ScopeTest extends TestCase
     {
         $_GET = ['who' => 'root']; $_POST = ['p' => 'root']; $_COOKIE = ['c' => 'root']; $_FILES = [];
         $a = new \Scope(); $b = new \Scope();
-        $a->run(function () { self::assertSame(['who' => 'root'], $_GET, 'a copy of the root'); $_GET = ['who' => 'a']; $_POST = ['p' => 'a']; });
-        $b->run(function () { self::assertSame(['who' => 'root'], $_GET, 'a copy of the root, not of a'); $_GET = ['who' => 'b']; $_COOKIE = ['c' => 'b']; });
+        $a->run(function () { self::assertSame([], $_GET); $_GET = ['who' => 'a']; $_POST = ['p' => 'a']; });
+        $b->run(function () { self::assertSame([], $_GET); $_GET = ['who' => 'b']; $_COOKIE = ['c' => 'b']; });
         $a->run(function () {
             self::assertSame(['who' => 'a'], $_GET);
             self::assertSame(['p' => 'a'], $_POST);
-            self::assertSame(['c' => 'root'], $_COOKIE);
+            self::assertSame([], $_COOKIE);
         });
         $b->run(function () {
             self::assertSame(['who' => 'b'], $_GET);
-            self::assertSame(['p' => 'root'], $_POST);
+            self::assertSame([], $_POST);
             self::assertSame(['c' => 'b'], $_COOKIE);
         });
         self::assertSame(['who' => 'root'], $_GET, 'main sees the root values after the outermost run()');
@@ -313,7 +313,7 @@ final class ScopeTest extends TestCase
         self::assertSame(['c' => 'root'], $_COOKIE);
     }
 
-    public function testNestedScopeStartsAsCopyOfItsCreatorAndDoesNotLeak(): void
+    public function testNestedScopeStartsEmptyAndDoesNotLeak(): void
     {
         $_GET = ['who' => 'root'];
         $a = new \Scope();
@@ -321,7 +321,7 @@ final class ScopeTest extends TestCase
             $_GET['who'] = 'a';
             $child = new \Scope();
             $child->run(function () {
-                self::assertSame(['who' => 'a'], $_GET, 'a copy of its creator, not of the root');
+                self::assertSame([], $_GET, 'starts empty, not a copy of its creator');
                 $_GET['who'] = 'child';
                 $_GET['extra'] = 1;
             });
@@ -335,8 +335,8 @@ final class ScopeTest extends TestCase
     {
         $_REQUEST = ['who' => 'root']; $_SERVER['who'] = 'root';
         $a = new \Scope(); $b = new \Scope();
-        $a->run(function () { self::assertSame('root', $_SERVER['who']); $_REQUEST = ['who' => 'a']; $_SERVER['who'] = 'a'; });
-        $b->run(function () { self::assertSame('root', $_SERVER['who']); $_REQUEST = ['who' => 'b']; $_SERVER['who'] = 'b'; });
+        $a->run(function () { self::assertFalse(isset($_SERVER['who'])); $_REQUEST = ['who' => 'a']; $_SERVER['who'] = 'a'; });
+        $b->run(function () { self::assertFalse(isset($_SERVER['who'])); $_REQUEST = ['who' => 'b']; $_SERVER['who'] = 'b'; });
         $a->run(function () {
             self::assertSame(['who' => 'a'], $_REQUEST);
             self::assertSame('a', $_SERVER['who']);
@@ -349,7 +349,7 @@ final class ScopeTest extends TestCase
         self::assertSame('root', $_SERVER['who']);
     }
 
-    public function testNestedScopeServerStartsAsCopyAndDoesNotLeak(): void
+    public function testNestedScopeServerStartsEmptyAndDoesNotLeak(): void
     {
         // "argv" is the SAPI's: present before any scope exists, which is what "environment
         // entries present" means for $_SERVER.
@@ -357,12 +357,11 @@ final class ScopeTest extends TestCase
         $_SERVER['who'] = 'root';
         $a = new \Scope();
         $a->run(function () {
-            self::assertSame('root', $_SERVER['who'], 'a new scope copies its creator\'s \$_SERVER');
-            self::assertTrue(isset($_SERVER['argv']), 'environment entries included');
+            self::assertSame([], $_SERVER, 'a new scope starts with an empty \$_SERVER');
             $_SERVER['who'] = 'a';
             $child = new \Scope();
             $child->run(function () {
-                self::assertSame('a', $_SERVER['who']);
+                self::assertSame([], $_SERVER);
                 $_SERVER['who'] = 'child';
             });
             self::assertSame('a', $_SERVER['who'], 'the child write does not leak to the parent');
@@ -474,7 +473,7 @@ final class ScopeTest extends TestCase
             $_GET = ['v' => 1];
             \fiber_interop\scope\activate();
             self::assertSame(['v' => 1], $_GET);
-            self::assertSame(['v' => 0], $records->getValue()[$a][0], 'nothing was saved: no swap happened (the record is still the copy made at construction)');
+            self::assertSame([], $records->getValue()[$a][0], 'nothing was saved: no swap happened');
         });
         self::assertSame(['v' => 1], $records->getValue()[$a][0], 'saved when run() switched away');
     }
@@ -608,37 +607,37 @@ final class ScopeTest extends TestCase
                 'Asia/Tokyo America/Chicago Asia/Tokyo',
                 $a->run(fn() => date_default_timezone_get() . ' ' . $b->run(fn() => date_default_timezone_get()) . ' ' . date_default_timezone_get()),
             );
-            // A scope created inside a scope starts with that scope's timezone.
-            self::assertSame('Asia/Tokyo', $a->run(fn() => (new \Scope())->run(fn() => date_default_timezone_get())));
+            // A scope created inside a scope starts from ini, not from the creator.
+            self::assertSame(ini_get('date.timezone') ?: 'UTC', $a->run(fn() => (new \Scope())->run(fn() => date_default_timezone_get())));
         } finally {
             date_default_timezone_set($orig);
         }
     }
 
-    public function testTimezoneOfNewScopeIsTheCreators(): void
+    public function testTimezoneOfNewScopeComesFromIniNotCreator(): void
     {
         $orig = date_default_timezone_get();
         try {
             date_default_timezone_set('Asia/Tokyo');
-            self::assertSame('Asia/Tokyo', (new \Scope())->run(fn() => date_default_timezone_get()));
+            $expected = ini_get('date.timezone') ?: 'UTC';
+            self::assertSame($expected, (new \Scope())->run(fn() => date_default_timezone_get()));
             self::assertSame('Asia/Tokyo', date_default_timezone_get());
         } finally {
             date_default_timezone_set($orig);
         }
     }
 
-    public function testNewScopeSuperglobalsAreACopyAndRootIsUnchanged(): void
+    public function testNewScopeSuperglobalsAreEmptyAndRootIsUnchanged(): void
     {
         $_GET = ['r' => 1]; $_POST = ['r' => 2]; $_COOKIE = ['r' => 3]; $_FILES = ['r' => 4]; $_REQUEST = ['r' => 5];
         $_SERVER['rootmark'] = 1;
         (new \Scope())->run(function () {
-            self::assertSame(['r' => 1], $_GET);
-            self::assertSame(['r' => 2], $_POST);
-            self::assertSame(['r' => 3], $_COOKIE);
-            self::assertSame(['r' => 4], $_FILES);
-            self::assertSame(['r' => 5], $_REQUEST);
-            self::assertSame(1, $_SERVER['rootmark']);
-            $_GET['child'] = 1; unset($_POST);
+            self::assertSame([], $_GET);
+            self::assertSame([], $_POST);
+            self::assertSame([], $_COOKIE);
+            self::assertSame([], $_FILES);
+            self::assertSame([], $_REQUEST);
+            self::assertSame([], $_SERVER);
         });
         self::assertSame(['r' => 1], $_GET);
         self::assertSame(['r' => 5], $_REQUEST);
@@ -657,39 +656,9 @@ final class ScopeTest extends TestCase
         });
     }
 
-    public function testNewScopeFromTheRootHasNoSessionAndCopiesTheCreatorsSession(): void
+    public function testNewScopeHasNoSession(): void
     {
-        $had = array_key_exists('_SESSION', $GLOBALS);
-        $old = $_SESSION ?? null;
-        try {
-            unset($_SESSION);
-            (new \Scope())->run(fn() => self::assertFalse(isset($_SESSION)));
-            $_SESSION = ['k' => 1];
-            $s = new \Scope();
-            $_SESSION['k'] = 2;
-            $s->run(function () {
-                self::assertSame(['k' => 1], $_SESSION);
-                $_SESSION['k'] = 3;
-            });
-            self::assertSame(['k' => 2], $_SESSION);
-        } finally {
-            if ($had) { $_SESSION = $old; } else { unset($_SESSION); }
-        }
-    }
-
-    public function testNewScopeIndependenceAndSharedObjects(): void
-    {
-        $o = new \stdClass; $o->n = 1;
-        $_GET = ['o' => $o, 'a' => 1];
-        $s = new \Scope();
-        $_GET['late'] = 1;
-        $s->run(function () use ($o) {
-            self::assertSame(['o' => $o, 'a' => 1], $_GET);
-            $_GET['o']->n = 2;
-            unset($_GET['a']);
-        });
-        self::assertSame(2, $o->n, 'objects in the arrays are shared');
-        self::assertSame(['o' => $o, 'a' => 1, 'late' => 1], $_GET);
+        (new \Scope())->run(fn() => self::assertFalse(isset($_SESSION)));
     }
 
     public function testBindRunsInTheBoundScopeAndLeavesTheOriginalAlone(): void
@@ -778,15 +747,16 @@ final class ScopeTest extends TestCase
         }
         $orig = \Locale::getDefault();
         try {
-            \Locale::setDefault('de_DE');
-            $b = new \Scope();                      // a copy of the root's de_DE
-            \Locale::setDefault('en_US');
-            $a = new \Scope();                      // a copy of en_US
+            $start = (new \Scope())->run(fn() => \Locale::getDefault());
+            \Locale::setDefault($start === 'de_DE' ? 'en_US' : 'de_DE');
+            $creator = \Locale::getDefault();
+            $a = new \Scope();
+            $b = new \Scope();
             $a->run(function () { \Locale::setDefault('nb_NO'); });
-            self::assertSame('en_US', \Locale::getDefault());
+            self::assertSame($creator, \Locale::getDefault());
             self::assertSame('nb_NO', $a->run(fn() => \Locale::getDefault()));
-            self::assertSame('de_DE', $b->run(fn() => \Locale::getDefault()));
-            self::assertSame('en_US', \Locale::getDefault());
+            self::assertSame($start, $b->run(fn() => \Locale::getDefault()));
+            self::assertSame($creator, \Locale::getDefault());
         } finally {
             \Locale::setDefault($orig);
         }
